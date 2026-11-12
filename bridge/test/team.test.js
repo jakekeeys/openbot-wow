@@ -94,7 +94,7 @@ function fakeHost() {
     actions = a;
     return peer;
   };
-  return { state, calls, createPeer, event: (e) => actions.current.onTeamEvent('host-1', e) };
+  return { state, calls, createPeer, event: (e) => actions.current.onTeamEvent('host-1', e), update: (u) => actions.current.onConnectionUpdate({ hostId: 'host-1', message: null, ...u }) };
 }
 
 async function connected(fake, extra = {}) {
@@ -259,4 +259,33 @@ test('in the game, servers appear in the agent filter and their runs can be stop
   assert.ok(snap.projects.some((p) => p.name === 'Ada · Homelab'));
   remote.stop();
   b.stop();
+});
+
+test('a lost connection is tried again until it comes back', { skip }, async () => {
+  const fake = fakeHost();
+  const c = await connected(fake, { retryMs: 10 });
+  const connects = () => fake.calls.filter((x) => x.type === 'connect').length;
+  assert.equal(connects(), 1);
+  await fake.update({ state: 'offline', message: "The connection's network path changed. Reconnecting." });
+  assert.equal(c.state, 'offline');
+  await tick(60);
+  assert.equal(connects(), 2, 'it connected again');
+  assert.equal(c.state, 'connected');
+  assert.ok(c.threads.size > 0, 'and loaded the server again');
+  c.stop();
+});
+
+test('a revoked session or a server that is off does not start new attempts', { skip }, async () => {
+  const fake = fakeHost();
+  const c = await connected(fake, { retryMs: 10 });
+  const connects = () => fake.calls.filter((x) => x.type === 'connect').length;
+  await fake.update({ state: 'connecting', hostOffline: true });
+  assert.match(c.error, /server is offline/);
+  await tick(40);
+  assert.equal(connects(), 1, 'the relay holds that attempt itself');
+  await fake.update({ state: 'offline', code: 'session_revoked', message: 'revoked' });
+  assert.match(c.error, /openbot-wow login/);
+  await tick(40);
+  assert.equal(connects(), 1);
+  c.stop();
 });

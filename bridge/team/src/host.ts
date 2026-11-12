@@ -86,11 +86,13 @@ export class TeamHostClient extends EventEmitter {
   private dirtyAgents = false;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
-  private backoff = 2000;
+  private attempt = 0;
+  private connecting = false;
+  private makePeer: (() => PeerLike) | null = null;
   private marks: Marks;
 
   constructor(
-    private readonly input: { directory: Directory; host: Host; stateDir: string; config?: Record<string, unknown>; log?: Log; createPeer?: PeerFactory },
+    private readonly input: { directory: Directory; host: Host; stateDir: string; config?: Record<string, unknown>; log?: Log; createPeer?: PeerFactory; retryMs?: number },
   ) {
     super();
     this.origin = `${input.host.name} (OpenBot relay)`;
@@ -127,7 +129,8 @@ export class TeamHostClient extends EventEmitter {
       },
     };
     const make: PeerFactory = this.input.createPeer ?? ((a, o) => createRemoteTeamPeer(a, o));
-    this.peer = make(actions, { waitForHost: host.hosted === true });
+    this.makePeer = () => make(actions, { waitForHost: host.hosted === true });
+    this.peer = this.makePeer();
     void this.connect();
   }
 
@@ -141,16 +144,28 @@ export class TeamHostClient extends EventEmitter {
   }
 
   private async connect() {
-    if (this.stopped || !this.peer) return;
+    if (this.stopped || !this.peer || this.connecting) return;
+    this.connecting = true;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    // After a few failed tries, start over with a new peer rather than the one that keeps failing.
+    if (this.attempt >= 3 && this.makePeer) {
+      const old = this.peer;
+      this.peer = this.makePeer();
+      void old.dispose().catch(() => undefined);
+    }
     this.setState("connecting");
     try {
       const res = await this.peer.execute({ id: this.nextId(), type: "connect", hostId: this.input.host.hostId, hostPublicKey: this.input.host.devicePublicKey });
       if (!res.ok) throw new TeamRequestError(res.error ?? "No connection to the server.");
       await this.loadAll();
-      this.backoff = 2000;
+      if (this.attempt > 0) this.log("reconnected");
+      this.attempt = 0;
       this.setState("connected");
     } catch (err) {
       this.failed(err);
+    } finally {
+      this.connecting = false;
     }
   }
 
@@ -158,24 +173,49 @@ export class TeamHostClient extends EventEmitter {
     const message = err instanceof Error ? err.message : String(err);
     this.log(message);
     this.setState("offline", message);
-    if (this.stopped) return;
-    const delay = this.backoff;
-    this.backoff = Math.min(this.backoff * 2, 120_000);
-    if (this.retryTimer) clearTimeout(this.retryTimer);
-    this.retryTimer = setTimeout(() => void this.connect(), delay);
+    this.scheduleRetry();
+  }
+
+  // As OpenBot's apps do (createRemoteConnectionRecovery): a lost connection is tried again after
+  // 2, 4, 8 and 16 seconds, then every 30 seconds, with up to a fifth added at random.
+  private scheduleRetry() {
+    if (this.stopped || this.retryTimer || this.connecting) return;
+    this.attempt += 1;
+    const first = this.input.retryMs ?? 2_000;
+    const base = this.attempt > 4 ? first * 15 : first * 2 ** (this.attempt - 1);
+    this.retryTimer = setTimeout(
+      () => {
+        this.retryTimer = null;
+        void this.connect();
+      },
+      Math.round(base * (1 + 0.2 * Math.random())),
+    );
   }
 
   private onConnectionUpdate(update: RemoteTeamConnectionUpdate) {
     if (update.state === "online") {
+      this.attempt = 0;
       if (update.resync) void this.loadAll().catch((err) => this.log(`resync: ${(err as Error).message}`));
       else if (this.loaded && this.state !== "connected") this.setState("connected");
       return;
     }
-    if (update.state === "offline") {
-      // The peer recovers on its own, except from these two.
-      if (update.code === "session_revoked") this.stopped = true;
-      this.setState("offline", update.message ?? "The server went offline.");
+    // OpenBot's relay holds the attempt while the server itself is off; it continues when it's back.
+    if (update.state === "connecting" && update.hostOffline) {
+      this.setState("offline", "The server is offline. Waiting for it to come back.");
+      return;
     }
+    if (update.state !== "offline") return;
+    if (update.code === "session_revoked") {
+      this.stopped = true;
+      this.setState("offline", "The bridge's OpenBot session was revoked. Run openbot-wow login.");
+      return;
+    }
+    if (update.code === "protocol_error") {
+      this.setState("offline", `${update.message ?? "The server speaks another protocol."} Update openbot-wow.`);
+      return;
+    }
+    this.setState("offline", update.message ?? "The connection to the server was lost.");
+    this.scheduleRetry();
   }
 
   private nextId() {
