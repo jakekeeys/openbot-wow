@@ -830,7 +830,14 @@ export class Bridge {
         dictation: voice.dictation || undefined,
         dictationHint: voice.hint || undefined,
         slots: this.bank.slots,
-        envs: ob.envs.length > 1 ? ob.environments().map((e) => ({ label: escapeWow(e.label), state: e.state, local: e.local, n: e.threads })) : undefined,
+        envs: ob.envs.length > 1
+          ? ob.environments().map((e) => ({ label: escapeWow(e.label), state: e.state, local: e.local, n: e.threads, err: e.state !== 'connected' && e.error ? escapeWow(String(e.error).slice(0, 90)) : undefined }))
+          : undefined,
+        // How this computer is reached ('relay' or 'database'), and the bridge's OpenBot sign-in:
+        // 'on', 'off' (not signed in) or 'error' (signed in, but the server list fails).
+        via: ob.local?.via,
+        relay: this.relayState(),
+        relayErr: this.servers?.status().error ? escapeWow(String(this.servers.status().error).slice(0, 90)) : undefined,
       },
       projects,
       threads: list,
@@ -843,6 +850,13 @@ export class Bridge {
       models: models && this.client?.modelsHash !== models.h ? models : undefined,
       results: this.results.slice(-8).map(({ id, ok, msg, open }) => ({ id, ok, msg, open })),
     };
+  }
+
+  relayState() {
+    if (!this.servers) return undefined;
+    const st = this.servers.status();
+    if (!st.signedIn) return 'off';
+    return st.error ? 'error' : 'on';
   }
 
   // Every machine's model list for the game's model picker, with a short hash the

@@ -73,9 +73,14 @@ function ns.SelfTest()
 	local age = T.bridgeNow and (time() - T.bridgeNow) or nil
 	line(age ~= nil and age < 300, "bridge: " .. (b.version and ("openbot-wow " .. b.version) or "not heard from") .. (age and string.format(", last update %ds ago", age) or ""),
 		"check `openbot-wow status` on your desktop")
-	line(b.t3 == "connected", "OpenBot on this computer: " .. tostring(b.t3), b.t3err)
+	line(b.t3 == "connected", "OpenBot on this computer: " .. tostring(b.t3) .. (b.via and (b.via == "relay" and " (through the OpenBot relay)" or " (from its database)") or ""), b.t3err)
+	if b.relay then
+		line(b.relay ~= "error", "OpenBot relay: " .. (b.relay == "on" and "signed in" or b.relay == "off" and "not signed in, so this computer only" or "signed in, but the server list failed"),
+			b.relay == "off" and "run openbot-wow login on your desktop for your other servers" or b.relayErr)
+		if b.relay == "on" and b.via == "database" then line(false, "relay to this computer: down, reading its database meanwhile", "it retries on its own; openbot-wow status shows why") end
+	end
 	for _, e in ipairs(b.envs or {}) do
-		if not e["local"] then line(e.state == "connected", "OpenBot on " .. e.label .. ": " .. tostring(e.state), "check that machine is on and reachable") end
+		if not e["local"] then line(e.state == "connected", "OpenBot server " .. e.label .. ": " .. tostring(e.state), e.err or "openbot-wow status on your desktop shows why") end
 	end
 	line(T:SlotsLeft() > 40, string.format("live updates left: %d of %d", T:SlotsLeft(), T.slotCount), "/reload to free a fresh set")
 	local errs = ns.db.errors or {}

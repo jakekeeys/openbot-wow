@@ -641,6 +641,45 @@ do
 	ns.MinimapButton:Refresh()
 end
 
+-- Relay state: servers and the route to this computer show next to "Connected".
+do
+	local function withBridge(extra)
+		local b = {}
+		for k, v in pairs(data.bridge or {}) do b[k] = v end
+		for k, v in pairs(extra) do b[k] = v end
+		data.gen = (ns.db.gen or 0) + 1
+		data.now = time()
+		data.bridge = b
+		ns.Transport:Apply(data)
+	end
+	local strip = function(s) return (s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
+	withBridge({ t3 = "connected", relay = "on", via = "relay", envs = {
+		{ label = "this computer", state = "connected", ["local"] = true, n = 5 },
+		{ label = "Homelab", state = "connected", n = 3 },
+	} })
+	check(ns.Transport:BridgeState() == "connected", "relay: link connected")
+	check(ns.Transport:RelayIssue() == nil, "relay: nothing down")
+	check(strip(ns.Main:StatusLine()):find("Connected  ·  OpenBot relay · 1 server", 1, true) ~= nil, "relay: status says how it's connected")
+	withBridge({ envs = {
+		{ label = "this computer", state = "connected", ["local"] = true, n = 5 },
+		{ label = "Homelab", state = "offline", n = 0, err = "The connection to the server was lost." },
+	} })
+	check(ns.Transport:RelayIssue() == "Homelab offline", "relay: an offline server is named")
+	check(strip(ns.Main:StatusLine()):find("Homelab offline", 1, true) ~= nil, "relay: status line shows it")
+	ns.Tracker:Refresh()
+	withBridge({ via = "database", envs = {
+		{ label = "this computer", state = "connected", ["local"] = true, n = 5 },
+		{ label = "Homelab", state = "connected", n = 3 },
+	} })
+	check(ns.Transport:RelayIssue() == "relay to this computer offline", "relay: falling back to the database is shown")
+	withBridge({ relay = "off", via = "database", envs = nil })
+	check(ns.Transport:RelayIssue() == nil and strip(ns.Main:StatusLine()):find("this computer only", 1, true) ~= nil, "relay: not signed in says this computer only")
+	withBridge({ relay = "on", via = "relay", t3 = "offline" })
+	check(strip(ns.Main:StatusLine()):find("relay to this computer is down", 1, true) ~= nil, "relay: a down relay to this computer is not called OpenBot offline")
+	SlashCmdList.OPENBOT("selftest")
+	withBridge({ t3 = "connected", relay = "on", via = "relay", envs = nil })
+end
+
 -- Exhaustion
 Stub.now = Stub.now + 2
 ns.Transport.slotCursor = ns.Transport.slotCount + 1

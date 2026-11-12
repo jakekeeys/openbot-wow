@@ -418,6 +418,36 @@ function T:BridgeState()
 	return "connected"
 end
 
+-- What's down beyond the link to this computer, as a short phrase, or nil: OpenBot servers
+-- that dropped off (their threads are hidden until they're back), the relay to this computer
+-- (the bridge reads its database meanwhile), or the server list itself.
+function T:RelayIssue()
+	local b = ns.Store.data.bridge
+	if not b then return nil end
+	if b.relay == "error" then return "servers unavailable", b.relayErr end
+	local down = {}
+	if b.relay == "on" and b.via == "database" then table.insert(down, "relay to this computer") end
+	for _, e in ipairs(b.envs or {}) do
+		if not e["local"] and e.state ~= "connected" then table.insert(down, e.label) end
+	end
+	if #down == 0 then return nil end
+	local text = #down > 2 and (down[1] .. ", " .. down[2] .. " +" .. (#down - 2)) or table.concat(down, ", ")
+	return text .. " offline"
+end
+
+-- How this computer and the servers are reached, for the status line: nil when there's
+-- nothing to add.
+function T:RelaySummary()
+	local b = ns.Store.data.bridge
+	if not b or not b.relay then return nil end
+	if b.relay == "off" then return "this computer only" end
+	local servers = 0
+	for _, e in ipairs(b.envs or {}) do
+		if not e["local"] then servers = servers + 1 end
+	end
+	return "OpenBot relay" .. (servers > 0 and string.format(" · %d server%s", servers, servers == 1 and "" or "s") or "")
+end
+
 ---------------------------------------------------------------------------
 -- Ticker
 

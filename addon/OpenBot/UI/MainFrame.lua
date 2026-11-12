@@ -587,7 +587,22 @@ function M:StatusLine()
 	end
 	local state = T:BridgeState()
 	local entry = LINK_TEXT[state] or LINK_TEXT.waiting
-	local text = ns.Color(entry[1], entry[2])
+	local b = ns.Store.data.bridge or {}
+	local text
+	if state == "t3offline" and b.via == "relay" then
+		text = ns.Color("red", "Bridge connected, but the OpenBot relay to this computer is down — retrying")
+	elseif state == "connected" then
+		-- Connected, plus how: through the relay or this computer only, or what's down.
+		local issue = T:RelayIssue()
+		if issue then
+			text = ns.Color("orange", "Connected") .. ns.Color("orange", "  ·  " .. issue)
+		else
+			local how = T:RelaySummary()
+			text = ns.Color("green", "Connected") .. (how and ns.Color("grey", "  ·  " .. how) or "")
+		end
+	else
+		text = ns.Color(entry[1], entry[2])
+	end
 	if #T.queue > 0 then
 		text = text .. ns.Color("grey", "  ·  sending…")
 	end

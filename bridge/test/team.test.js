@@ -257,6 +257,15 @@ test('in the game, servers appear in the agent filter and their runs can be stop
   assert.equal(ada.env, 'Homelab');
   assert.equal(snap.threads.find((t) => t.id === 's1~t:task-1').sd, undefined, 'its side threads take replies');
   assert.ok(snap.projects.some((p) => p.name === 'Ada · Homelab'));
+  b.servers = { status: () => ({ signedIn: true, error: null }), stop() {} };
+  remote.setState('offline', 'The connection to the server was lost.');
+  let bridge = b.buildSnapshot().bridge;
+  assert.equal(bridge.relay, 'on');
+  assert.equal(bridge.via, 'database');
+  assert.deepEqual(bridge.envs.find((e) => e.label === 'Homelab'), { label: 'Homelab', state: 'offline', local: undefined, n: 3, err: 'The connection to the server was lost.' });
+  b.servers = { status: () => ({ signedIn: false, error: null }), stop() {} };
+  bridge = b.buildSnapshot().bridge;
+  assert.equal(bridge.relay, 'off', 'not signed in');
   remote.stop();
   b.stop();
 });

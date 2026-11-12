@@ -137,13 +137,18 @@ function S:Refresh()
 		"OpenBot: " .. (b.t3 == "connected" and ns.Color("green", "connected" .. (b.server and (" (" .. b.server .. ")") or "")) or ns.Color("red", b.t3 or "unknown"))
 			.. (b.t3err and ns.Color("grey", " — " .. b.t3err) or ""),
 		(function()
-			if not b.envs then return "Machines: this computer only " .. ns.Color("grey", "(add more with openbot-wow env add <host>)") end
+			local route = b.via == "relay" and ns.Color("green", "through the OpenBot relay") or b.via == "database" and (b.relay == "on" and ns.Color("orange", "from its database (relay down)") or "from its database") or ns.Color("grey", "unknown")
+			local head = "This computer: " .. route .. "\n"
+			if b.relay == "off" or not b.relay then return head .. "Servers: none " .. ns.Color("grey", "(run openbot-wow login for your other OpenBot servers)") end
+			if b.relay == "error" then return head .. "Servers: " .. ns.Color("red", "unavailable") .. (b.relayErr and ns.Color("grey", " — " .. b.relayErr) or "") end
 			local parts = {}
-			for _, e in ipairs(b.envs) do
-				local ok = e.state == "connected"
-				table.insert(parts, ns.Color(ok and "green" or "red", e.label) .. ns.Color("grey", string.format(" (%s)", ok and (e.n .. " threads") or e.state)))
+			for _, e in ipairs(b.envs or {}) do
+				if not e["local"] then
+					local ok = e.state == "connected"
+					table.insert(parts, ns.Color(ok and "green" or "red", e.label) .. ns.Color("grey", string.format(" (%s)", ok and (e.n .. " threads") or (e.err or e.state))))
+				end
 			end
-			return "Machines: " .. table.concat(parts, ", ")
+			return head .. "Servers: " .. (#parts > 0 and table.concat(parts, ", ") or ns.Color("grey", "none on your account"))
 		end)(),
 		string.format("Live updates left this session: %s of %d (/reload frees more)", ns.Color("white", T:SlotsLeft()), T.slotCount),
 		"Update signals: " .. (SIGNAL_TEXT[T.signals] or T.signals),

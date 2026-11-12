@@ -184,6 +184,9 @@ function K:Refresh(resetPosition)
 		notice = { text = "Live updates paused", sub = "Click to /reload", action = function() ReloadUI() end }
 	elseif #entries > 0 and (state == "stale" or state == "t3offline") then
 		notice = { text = "Connection lost", sub = state == "stale" and "Is openbot-wow running?" or "OpenBot is offline" }
+	elseif state == "connected" and ns.Transport:RelayIssue() then
+		-- A server that dropped off: its threads are hidden until it's back.
+		notice = { text = ns.Transport:RelayIssue(), sub = "Its threads come back when it reconnects" }
 	end
 
 	if #entries == 0 and not notice and not s.trackerAlways then
