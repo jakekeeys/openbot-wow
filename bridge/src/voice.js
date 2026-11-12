@@ -239,7 +239,7 @@ export class Voice {
 
   startRecording() {
     this.cancelRecording();
-    const file = path.join(os.tmpdir(), `t3wow-dictation-${process.pid}-${Date.now()}.wav`);
+    const file = path.join(os.tmpdir(), `openbot-wow-dictation-${process.pid}-${Date.now()}.wav`);
     const [cmd, args] = this.recorder()(file);
     const child = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';

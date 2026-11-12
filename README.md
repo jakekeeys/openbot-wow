@@ -1,127 +1,143 @@
-# T3 Code for World of Warcraft
+# OpenBot for World of Warcraft
 
-Watch and run your [T3 Code](https://t3.codes) agent threads without leaving the game. It's a native addon for World of Warcraft: Forever, built from Blizzard's own UI templates so it looks and plays like the rest of the interface, plus a small bridge that connects it to T3 Code.
+Read, message and steer your [OpenBot](https://github.com/nightly-labs/openbot) agents without leaving the game. A native addon for **World of Warcraft: Forever**, plus a small bridge on your computer that connects it to OpenBot: this computer's agents and those on every OpenBot server you're a member of.
+
+It's a port of Ryan Hughes's [T3 Code for World of Warcraft](https://github.com/ryanrhughes/t3code-wow) (v0.3.0). The addon, the screen link, the update slots, controller support and voice are his work. This fork replaces the T3 Code backend with OpenBot.
 
 > [!WARNING]
-> **Early release, still experimental.** It's built for and tested on one setup: **Omarchy 4.5.0**, **T3 Code Nightly** (0.1.7-nightly) and **World of Warcraft: Forever** (1.60.x) under Proton. **macOS** with the native client and **CachyOS** with KDE Plasma are new and less tested (see [macOS](#macos) and [CachyOS and KDE Plasma](#cachyos-and-kde-plasma)). Other setups may work but aren't supported yet. T3 Code Nightly's API changes often, so a T3 update can break things until this catches up. Expect rough edges, and please [report them](https://github.com/ryanrhughes/t3code-wow/issues).
+> **Early and experimental.** Built and tested on **Omarchy** (Hyprland) with **OpenBot 0.66–0.69** and **WoW: Forever 1.60.x** under Proton. The original's macOS, KDE Plasma and Windows code is still in the bridge but hasn't been tried with this fork.
 
 ## What it does
 
-- **T3 Code window** (`/t3`): your threads grouped into Working, Open and Settled, filtered by project or machine. Read a thread, reply, steer a working thread or queue follow-ups, stop a run, settle or reopen it, start new threads, answer the agent's questions and approve its requests.
-- **Quest tracker**: what's running, what needs you and what just finished, right under your quests, with live timers.
-- **Notices**: a toast, a sound and a chat line when a thread finishes or needs you. They wait until combat ends, and stay quiet in dungeons and raids if you like.
-- **Full controller support**: the D-pad moves between controls, A selects, B goes back, LB/RB switch tabs, X reads aloud and holding Y dictates. Hold both triggers and press Back to open it from anywhere.
-- **Voice**: dictate replies with Omarchy's dictation, and have replies read aloud by your desktop voice (on macOS, the system voice) or the game's.
-- **Screenshots**: attach what's on your screen to a message so the agent can see your game.
-- **Every machine**: threads from your other computers via T3 Connect, all in one list.
-- **Usage**: your providers' plans and limits, the same as Omarchy's Agents panel shows.
-- A minimap button and a game-menu entry, for opening it without a keyboard.
+- **OpenBot window** (`/ob`): every agent's main chat and its open side threads, grouped into Working, Open and Settled. Read a thread, message an agent, steer a working one, stop a run, answer its questions and approve its requests.
+- **Server switcher**: the agent filter lists **Everything on <server>** for this computer and each OpenBot server you belong to. Agents on a server show as "Name · Server".
+- **Quest tracker**: what's running, what needs you and what just finished, under your quests.
+- **Notices**: a toast, a sound and a chat line when an agent finishes or needs you. They wait until combat ends.
+- **Models**: pick an agent's model and reasoning level from the server's own model list.
+- **Screenshots**: attach what's on your screen to a message.
+- **Controller support** and **voice** (dictation with Omarchy, replies read aloud), as in the original.
+- **Usage**: your providers' limits, from Omarchy's Agents panel.
+
+## How it reaches OpenBot
+
+The bridge signs in to your OpenBot account as a device of its own (`openbot-wow login`, with an email code). It then uses OpenBot's own client code, the same code as OpenBot's phone and web apps, to reach every server on your account through OpenBot's relay, including this computer's OpenBot (listed as "Desktop"). That's the full feature set everywhere.
+
+Without a sign-in, or while the relay to this computer has been down for a minute, the bridge reads this computer's OpenBot directly instead: its database, read-only, plus OpenBot's **Local scripts** API for sending. That mode is more limited:
+
+| | Signed in (relay) | Not signed in (this computer only) |
+| --- | --- | --- |
+| Read chats and side threads | ✓ | ✓ |
+| Message an agent's main chat | ✓ | ✓ with Local scripts on for that agent |
+| Reply in a side thread | ✓ | — |
+| Stop a run | ✓ | — |
+| Answer questions and approvals | ✓ | ✓ with Local scripts on |
+| Model list | ✓ server's list | — only models agents use, plus your config |
+| Other OpenBot servers | ✓ | — |
+
+Settled, archived and read-in-game marks are kept by the bridge. A new run brings a thread back.
 
 ## Requirements
 
-- **Omarchy 4.5.0** (Hyprland), **CachyOS** with KDE Plasma (see [CachyOS and KDE Plasma](#cachyos-and-kde-plasma)), or **macOS** (see [macOS](#macos)). On Omarchy the bridge reads the game window with Hyprland's screen capture, and dictation and usage come from Omarchy's own tools.
-- **T3 Code Nightly**, installed and running. Its `t3` command gives the bridge a login.
-- **World of Warcraft: Forever**, installed with Battle.net: Omarchy's Battle.net (Proton), Battle.net in Faugus Launcher, Lutris or Steam on CachyOS, or the native Mac app.
-- **Node.js 22** or newer.
-- **Game sound on.** The addon learns about new updates through silent sounds; with sound off it falls back to slower polling.
+- **OpenBot** on this computer (for this computer's agents), and an OpenBot account to sign the bridge in to.
+- **World of Warcraft: Forever**, installed with Battle.net.
+- **Node.js 22.13** or newer, and **git** (the first install fetches OpenBot's client code to build the relay client).
+- **grim** on Hyprland, so the bridge can see the game.
+- **Game sound on.** The addon learns about updates through silent sounds; with sound off it falls back to slower polling.
 
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ryanrhughes/t3code-wow/main/install.sh | bash
+git clone https://github.com/jakekeeys/openbot-wow
+cd openbot-wow
+./install.sh
+openbot-wow login
 ```
 
-It finds World of Warcraft: Forever in Omarchy's Battle.net, in the prefixes Faugus Launcher and Lutris recorded, or wherever Battle.net installed it (for anything unusual, add `bash -s -- --wow "/path/to/World of Warcraft"`). It installs the addon into the game, gives the bridge a T3 Code session limited to reading and running threads, and starts the bridge as the `t3code-wow` user service.
+`install.sh` builds the relay client, finds WoW: Forever (for anything unusual, add `--wow "/path/to/World of Warcraft"`), installs the addon and its update folders into the game, and starts the bridge as the `openbot-wow` user service. `openbot-wow login` asks for your OpenBot email and the code it sends. Run it in a terminal.
 
-Then it tells you what to do in the game and waits until the game checks in. The first time, **fully quit and restart World of Warcraft**: the game only finds new addon folders when it starts. After that, updates only need a `/reload`.
+The first time, **fully quit and restart World of Warcraft**: the game only finds new addon folders when it starts. After that, `/reload` is enough.
 
-To install from a clone instead, run `./install.sh` in it.
-
-### Update
-
-Run the same install command again:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ryanrhughes/t3code-wow/main/install.sh | bash
-```
-
-It downloads the latest version, replaces the installed copy and restarts the bridge, keeping your settings, T3 Code session and machines. Then type `/reload` in game; the installer tells you when an update needs a full game restart instead. To install a specific release, pipe to `T3CODE_WOW_REF=v0.2.0 bash` instead of `bash`. From a clone, `git pull` and run `./install.sh` again.
-
-### macOS
-
-The same install command works on a Mac with the native WoW: Forever client. Install Node.js 22 first (`brew install node`). The installer finds the game in `/Applications/World of Warcraft` or wherever Battle.net put it, and runs the bridge as a launch agent (`~/Library/LaunchAgents/t3code-wow.plist`) instead of a systemd service.
-
-- **Screen Recording permission.** The bridge reads the strip with macOS's `screencapture`, so it needs Screen Recording. The first time it runs, macOS asks, or lists `node` switched off under System Settings > Privacy & Security > Screen & System Audio Recording. Turn it on, then restart the bridge with `launchctl kickstart -k gui/$(id -u)/t3code-wow`. If the link stays down, `t3code-wow status` names the exact `node` it needs. The permission belongs to that `node` binary, so other programs that run with it can record the screen too. After you upgrade Node, macOS asks again for the new one.
-- **Display settings.** Run the game at the display's full resolution (its Retina resolution on a Retina display), fullscreen or windowed. A resolution the display stretches blurs the strip.
-- **Speech** uses the system voice (`say`). **Dictation** isn't available on macOS yet, and the Usage tab shows what T3 Code reports.
-- `~/.local/bin` isn't on a Mac's PATH by default. The installer says so; add it to your shell profile, or run `~/.local/bin/t3code-wow`.
-
-### CachyOS and KDE Plasma
-
-The same install command works on CachyOS (or another Arch system) running KDE Plasma 6. Install Node.js first (`sudo pacman -S nodejs`). The installer finds Battle.net in any prefix Faugus Launcher or Lutris knows about, in `~/Faugus`, or in Steam, Bottles and Heroic prefixes.
-
-- **Screen link.** KWin doesn't support the screen capture `grim` uses, so the bridge reads the game through KWin's own D-Bus screenshot interface with `busctl`, which ships with systemd. There's nothing to install or allow. The game must be on the current virtual desktop and not minimized.
-- **Screenshots** come out as JPEG when ImageMagick is installed (`sudo pacman -S imagemagick`), and as PNG otherwise.
-- **Speech** needs a desktop voice: `sudo pacman -S speech-dispatcher espeak-ng`. **Dictation** uses `voxtype` with `pw-record` if you have them. The Usage tab shows what T3 Code reports.
-- Other desktops on CachyOS: Hyprland works like Omarchy (install `grim`), and an X11 session uses ImageMagick's `import`. GNOME isn't supported, since it doesn't let other programs capture the screen without asking every time.
-
-### Uninstall
-
-```bash
-t3code-wow uninstall
-```
-
-This removes the addon and its update folders, its settings in the game, the bridge service (or launch agent), the bridge's T3 Code sessions (here and on any machine you added) and its files. On macOS, also turn `node` off under Screen & System Audio Recording: uninstalling can't do that for you.
+To update: `git pull && ./install.sh`, then `/reload`.
 
 ## Using it
 
-- `/t3` opens or closes the window. You can also use the minimap button, the game menu (Esc), or hold both triggers and press Back on a controller.
-- `/t3 new` starts a thread, `/t3 usage` opens the usage tab, `/t3 settings` the settings.
-- `/t3 unlock` lets you drag the tracker section somewhere else; Settings → Reset tracker puts it back under your quests.
-- To see threads from another machine on your tailnet, run `t3code-wow env add <host>`. It finds the machine's T3 Code over Tailscale and creates a session for the bridge over SSH.
+- `/ob` opens the window. The minimap button and the game menu do too, and from a controller: hold both triggers and press Back.
+- Pick a thread on the left to read it; type below to reply. A message to a working agent steers its current run.
+- **Message Agent** writes to an agent's main chat. Pick the agent (and, if you like, its model) in the header.
+- The ✕ next to Back stops the run you're reading.
+- `/ob selftest` checks the link step by step; `/ob report` puts diagnostics and a screenshot into the message box.
 
 ## Commands
 
-```bash
-t3code-wow status         # what the bridge sees: T3 Code, the game, the screen link, the addon
-t3code-wow status --log   # the same, with recent log lines
-t3code-wow env            # other machines shown in game (add <host> / remove <name>)
-t3code-wow uninstall      # remove everything (see above)
 ```
+openbot-wow status [--log]   what the bridge sees: OpenBot, your servers, the game, the screen link, the addon
+openbot-wow login            sign the bridge in to your OpenBot account (email code)
+openbot-wow logout           end its session; only this computer's agents show
+openbot-wow servers          your OpenBot servers and which show in game
+openbot-wow probe            capture the corner of the game window and try to read the strip
+openbot-wow uninstall        remove the addon, its settings, the service and the bridge's files
+```
+
+The bridge's session appears with your other OpenBot sign-ins, and you can revoke it there too.
+
+### Settings
+
+`~/.config/openbot-wow/config.json` (the installer writes the WoW paths):
+
+- `servers`: show only these servers, by name, e.g. `["Homelab"]`.
+- `hideServers`: hide these servers.
+- `models`: extra models for the picker when not signed in, as `[{ "provider": "claude", "model": "claude-sonnet-5-5", "name": "Sonnet 5.5", "efforts": ["low", "high"] }]`.
+- `screenshotDir`: where screenshots go when not signed in (default `~/OpenBot/Shared/wow-screenshots`, which agents can open).
+- `sideThreads`: how many recent side threads per agent to show when not signed in (60).
 
 ## When something's wrong
 
-1. Run `t3code-wow status --log` and check each line.
-2. In game, run `/t3 selftest`. It checks each step between the game and T3 Code and says which one fails.
-3. `/t3 report` fills the T3 Code message box with diagnostics and attaches a screenshot of your game. Send it to an agent, or copy the text into an issue.
-
-If the tracker says live updates are paused, do a `/reload`: the game allows a fixed number of updates per session (1,200 by default), which normally lasts many hours.
+1. `openbot-wow status --log`: is the bridge running, connected to OpenBot and your servers, and does it see the game?
+2. In game, `/ob selftest` checks each step between the game and the bridge.
+3. **"Bridge not responding"** while the window shows threads: the bridge can't read the strip in the top-left corner. Something drawn there, such as an FPS counter, hides it. Move or turn off that overlay.
+4. A thread stuck on **Loading…** after the bridge restarted or switched between the relay and the database: pick it again from the list.
 
 ## How it works
 
-Addons can't open network connections or read files, so the addon and the bridge talk through what the game does allow:
+Addons can't open network connections or read files, so the addon and the bridge talk through what the game allows:
 
 | Direction | How |
 | --- | --- |
-| Game → bridge | A small strip of coloured squares in the top-left corner for about a second after you do something. The bridge reads it with a screen capture (`grim` on Hyprland, KWin's D-Bus screenshot interface on KDE Plasma, `screencapture` on macOS). |
-| Bridge → game | Load-on-demand "slot" addons. The game reads a slot's Lua from disk when it loads, so the bridge writes a fresh snapshot there first. |
+| Game → bridge | A small strip of coloured squares in the top-left corner for about a second after you do something, encrypted and authenticated. The bridge reads it with a screen capture. |
+| Bridge → game | Load-on-demand "slot" addons: the bridge writes a fresh snapshot into the next one the game will load. |
 | "New data" signal | Large silent sound files the bridge fills or empties. The game re-reads big sounds every time it plays them, so the addon knows when to load the next slot. |
 
-The bridge talks to T3 Code over the same WebSocket API its apps use. Details, measurements and design decisions are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The bridge (`bridge/`) is Node. `src/fleet.js` puts this computer and your servers behind one interface; `team/src/` is the relay client, bundled with OpenBot's client code into `dist/team.mjs` by `npm run build:team`; `src/openbot.js` is the database and Local scripts fallback. Details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-- **The strip is encrypted.** Streams and recordings show it, so every frame is encrypted and authenticated (ChaCha20 and HMAC-SHA-256) with a key only the bridge and your addon have. To anyone else it's noise, and the bridge ignores anything it can't authenticate.
-- **Addon managers.** WowUp shows a single "T3 Code" entry. Leave the `T3Code_S###` folders alone: the addon needs them.
-- **Nothing else.** The addon never sends anything to Blizzard. The bridge doesn't read game memory or press keys for you; it reads pixels and writes files in the addon folder.
+Privacy notes:
+- The slots hold the latest snapshot, including message text, as Lua files under the game's `Interface/AddOns/OpenBot_S###`.
+- Screen streams and recordings show the strip, which is why it's encrypted.
+- The addon never sends anything to Blizzard. The bridge doesn't read game memory or press keys.
 
-## Contributing
+Don't run it next to T3 Code for World of Warcraft: both draw their strip in the same corner.
 
-Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. Coding agents should start with [AGENTS.md](AGENTS.md).
+## Development
+
+```bash
+cd bridge
+npm install && npm run build:team   # the relay client (fetches OpenBot's code at the pinned commit)
+npm test                            # bridge, protocol, crypto, relay client against a fake server
+node ../tools/snapshot.mjs /tmp/obsnap.lua
+lua5.1 ../tools/smoke.lua ../addon/OpenBot /tmp/obsnap.lua "$(cat /tmp/obsnap.view)"
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and, for coding agents, [AGENTS.md](AGENTS.md). The OpenBot commit is pinned in `bridge/team/build.mjs`; bump it when servers move to a newer protocol.
 
 ## Credits
 
-- [wow-ai](https://github.com/chelinho139/wow-ai) and [wow-forever-codex](https://github.com/0xinuarashi/wow-forever-codex) measured how the Forever client loads files, plays sounds and handles the gamepad. The strip-and-slot approach builds on their work.
-- [Bellular](https://www.youtube.com/@BellularGaming) ([@BellularGaming](https://x.com/BellularGaming)) gave the idea of making this an in-game addon instead of a desktop overlay.
+- [Ryan Hughes](https://github.com/ryanrhughes) wrote [T3 Code for World of Warcraft](https://github.com/ryanrhughes/t3code-wow), which this is built from.
+- [wow-ai](https://github.com/chelinho139/wow-ai) and [wow-forever-codex](https://github.com/0xinuarashi/wow-forever-codex) measured how the Forever client loads files, plays sounds and handles the gamepad.
+- The relay client uses [OpenBot](https://github.com/nightly-labs/openbot)'s own client packages.
 
 ## License
 
-[MIT](LICENSE). This is a fan project, not affiliated with or endorsed by Blizzard Entertainment. World of Warcraft is a trademark of Blizzard Entertainment. Use it at your own discretion.
+This repository is [MIT](LICENSE).
+
+The relay client the installer builds (`bridge/dist/team.mjs`) bundles OpenBot's code, which is under the [PolyForm Noncommercial License 1.0.0](https://github.com/nightly-labs/openbot/blob/main/LICENSE). That code isn't in this repository: the build fetches it from OpenBot's repository at a pinned commit and puts its license and notice next to the build (`bridge/team/OPENBOT-LICENSE`, `OPENBOT-NOTICE`). Use the built client for noncommercial purposes only.
+
+A fan project, not affiliated with or endorsed by Blizzard Entertainment or OpenBot. World of Warcraft is a trademark of Blizzard Entertainment.

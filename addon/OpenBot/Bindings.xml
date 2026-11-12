@@ -1,0 +1,17 @@
+<Bindings>
+	<Binding name="OPENBOT_TOGGLE" header="OPENBOT" category="ADDONS">
+		OpenBot_Binding("toggle")
+	</Binding>
+	<Binding name="OPENBOT_NEW" category="ADDONS">
+		OpenBot_Binding("new")
+	</Binding>
+	<Binding name="OPENBOT_TALK" runOnUp="true" category="ADDONS">
+		OpenBot_Binding("talk", keystate)
+	</Binding>
+	<Binding name="OPENBOT_READ" category="ADDONS">
+		OpenBot_Binding("read")
+	</Binding>
+	<Binding name="OPENBOT_HUSH" category="ADDONS">
+		OpenBot_Binding("hush")
+	</Binding>
+</Bindings>

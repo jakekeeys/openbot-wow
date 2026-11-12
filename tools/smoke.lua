@@ -6,23 +6,23 @@ local Stub = dofile("tools/wowstub.lua")
 Stub.slotData.default = snapshot
 
 local function check(cond, msg)
-	if not cond then for _, e in ipairs(T3Code and T3Code.errors or {}) do print("RECORDED ERROR: " .. e.msg) end error("CHECK FAILED: " .. msg, 2) end
+	if not cond then for _, e in ipairs(OpenBot and OpenBot.errors or {}) do print("RECORDED ERROR: " .. e.msg) end error("CHECK FAILED: " .. msg, 2) end
 	print("ok - " .. msg)
 end
 
 -- Load files in TOC order.
 local ns = {}
-for line in io.lines(addonDir .. "/T3Code.toc") do
+for line in io.lines(addonDir .. "/OpenBot.toc") do
 	line = line:gsub("\r", "")
 	if line ~= "" and not line:match("^#") and line:match("%.lua$") then
 		local path = addonDir .. "/" .. line:gsub("\\", "/")
 		local chunk = assert(loadfile(path))
-		chunk("T3Code", ns)
+		chunk("OpenBot", ns)
 	end
 end
-check(T3Code == ns, "namespace exported")
+check(OpenBot == ns, "namespace exported")
 
-Stub.Fire("ADDON_LOADED", "T3Code")
+Stub.Fire("ADDON_LOADED", "OpenBot")
 check(ns.db and ns.db.session and #ns.db.session == 8, "saved variables initialised")
 Stub.Fire("PLAYER_LOGIN")
 check(ns.Transport.slotCount == 600, "found 600 slots by binary search")
@@ -30,7 +30,7 @@ check(ns.Store.applied == 1, "bootstrap slot applied")
 check(#ns.Store.data.threads > 0, "threads loaded: " .. #ns.Store.data.threads)
 check(ns.Transport.stripShown, "hello strip shown")
 check(ns.Transport:Encrypted(), "link keys loaded from the bootstrap slot")
-check(T3Code_Inbox == nil, "slot global cleared after loading")
+check(OpenBot_Inbox == nil, "slot global cleared after loading")
 do
 	local drawn = WOWSTUB.StripCells()
 	-- Header byte 3 (version) spans cells 6..8: bits 16..23 of the frame.
@@ -54,8 +54,8 @@ local sig = ns.db.sigNext
 -- Patch the snapshot's ack to this UI session.
 local chunk = assert(loadfile(snapshot))
 chunk()
-local data = T3Code_Inbox
-T3Code_Inbox = nil
+local data = OpenBot_Inbox
+OpenBot_Inbox = nil
 data.ack = { ui = ns.ui, seq = ns.Transport.stripSeq }
 data.gen = data.gen + 1
 data.nextSig = sig + 1
@@ -80,11 +80,7 @@ ns.Main.composer._text = "Please run the tests"
 ns.Main:Send()
 check(#ns.Transport.queue >= 1, "command queued")
 check(ns.Transport:Payload():find("Please run the tests", 1, true) ~= nil, "message in strip payload")
-check(ns.Transport.queue[#ns.Transport.queue].args[3] == "steer", "follow-ups ask to steer by default")
-ns.db.settings.steerFollowUps = false
-ns.Main:Send("And the linter")
-check(ns.Transport.queue[#ns.Transport.queue].args[3] == nil, "with steering off, a follow-up names no mode, so the bridge queues it")
-ns.db.settings.steerFollowUps = true
+check(ns.Transport.queue[#ns.Transport.queue].args[3] == "steer", "follow-ups steer, as OpenBot does")
 check(ns.Transcript.echo[ns.viewId] ~= nil, "local echo shown")
 
 -- Pages
@@ -135,7 +131,7 @@ do
 	data.gen = data.gen + 1
 	check(hdr.Model:IsShown(), "the list comes back")
 end
-check(ns.Main:ChosenNewModel() == nil and ns.Main:NewThreadModel() ~= nil, "no pick yet: the picker shows T3's default but sends none")
+check(ns.Main:ChosenNewModel() == nil and ns.Main:NewThreadModel() ~= nil, "no pick yet: the picker shows OpenBot's default but sends none")
 -- Pick the last model that has reasoning levels (any model when none has).
 local pick
 for _, o in ipairs(Choices(hdr.Model)) do
@@ -172,7 +168,7 @@ if other then
 	local oi, os_ = ns.Store.SplitModelKey(other.value)
 	check(ns.Transport:Payload():find("\031model\031" .. ns.viewId .. "\031" .. oi .. "\031" .. os_, 1, true) ~= nil, "switching a thread's model sends model")
 	check(hdr.Model.value == other.value, "the picker shows the new model straight away")
-	ns.Transport:Apply({ gen = data.gen + 3, results = { { id = ns.Main.pendingModel.cmd, ok = false, msg = "Codex is switched off in T3 Code. Pick another model." } }, threads = data.threads, projects = data.projects, bridge = data.bridge, usage = data.usage, ack = { ui = ns.ui, seq = ns.Transport.stripSeq } })
+	ns.Transport:Apply({ gen = data.gen + 3, results = { { id = ns.Main.pendingModel.cmd, ok = false, msg = "Codex is switched off in OpenBot. Pick another model." } }, threads = data.threads, projects = data.projects, bridge = data.bridge, usage = data.usage, ack = { ui = ns.ui, seq = ns.Transport.stripSeq } })
 	check(ns.Main.pendingModel == nil and hdr.Model.value == cur, "a refused switch puts the picker back")
 end
 do
@@ -491,21 +487,21 @@ check(ns.Launcher.chord == "PADLTRIGGER-PADRTRIGGER-PADBACK", "controller shortc
 check(next(Stub.overrides) == nil, "no key bindings overridden (Forever's controller mode ignores them)")
 GameMenuFrame:InitButtons()
 local entry
-for _, b in ipairs(GameMenuFrame.buttons) do if b.text == "T3 Code" then entry = b end end
+for _, b in ipairs(GameMenuFrame.buttons) do if b.text == "OpenBot" then entry = b end end
 check(entry and entry.layoutIndex == 4.5, "game menu entry sits above Log Out")
 _G.HideUIPanel = function() end
 entry.cb()
 check(f._shown, "game menu entry opens the window")
-T3Code_Binding("toggle")
+OpenBot_Binding("toggle")
 check(not f._shown, "shortcut toggles it closed")
 check(#(ns.db.errors or {}) == 0, "no errors recorded")
 
 -- Slash command
-SlashCmdList.T3CODE("status")
+SlashCmdList.OPENBOT("status")
 check(#Stub.printed > 0, "status printed: " .. Stub.printed[#Stub.printed])
 
 -- Self-test: the long control plays, the empty one doesn't -> bells usable
-Stub.validSounds = { ["Interface\\AddOns\\T3Code\\Signals\\03999.wav"] = true }
+Stub.validSounds = { ["Interface\\AddOns\\OpenBot\\Signals\\03999.wav"] = true }
 ns.Transport.signals = "untested"
 ns.Transport.testing = nil
 ns.Transport:SelfTest()
@@ -518,11 +514,11 @@ ns.Transport.signals = "ok"
 
 -- A bell rung a couple of numbers ahead is still heard; bells map onto 8 rotating
 -- files. Only a fresh snapshot moves the bell position (to the bridge's nextSig).
-local function BellPath(k) return string.format("Interface\\AddOns\\T3Code\\Signals\\%05d.wav", 3991 + (k - 1) % 8) end
+local function BellPath(k) return string.format("Interface\\AddOns\\OpenBot\\Signals\\%05d.wav", 3991 + (k - 1) % 8) end
 local freshFile = os.tmpname()
 do
 	local fh = assert(io.open(freshFile, "w"))
-	fh:write(string.format("dofile(%q) T3Code_Inbox.gen = 9e15 T3Code_Inbox.nextSig = 503\n", snapshot))
+	fh:write(string.format("dofile(%q) OpenBot_Inbox.gen = 9e15 OpenBot_Inbox.nextSig = 503\n", snapshot))
 	fh:close()
 end
 ns.Transport.exhausted = nil
@@ -556,7 +552,7 @@ Stub.now = Stub.now + 5
 ns.Transport:HideStrip() -- (as if the bridge acknowledged it; isolates the bell check)
 ns.Transport.lastLoadAt = Stub.now
 ns.Transport.bellProbe = nil
-Stub.validSounds = { [BellPath(503)] = true, ["Interface\\AddOns\\T3Code\\Signals\\04000.wav"] = true }
+Stub.validSounds = { [BellPath(503)] = true, ["Interface\\AddOns\\OpenBot\\Signals\\04000.wav"] = true }
 local loads2 = Stub.loadCount
 for _ = 1, 12 do Stub.Tick(0.2) end
 check(Stub.loadCount == loads2, "no slot loaded while the client is too slow to tell bells apart")
@@ -584,7 +580,7 @@ do
 	check(ns.windowOpen == wasOpen, "holding the triggers alone does nothing (LT + RT action bars stay the game's)")
 	WOWSTUB.padHeld.PADBACK = true
 	frame()
-	check(ns.windowOpen ~= wasOpen, "triggers + Back toggles T3 Code")
+	check(ns.windowOpen ~= wasOpen, "triggers + Back toggles OpenBot")
 	frame()
 	frame()
 	check(ns.windowOpen ~= wasOpen, "holding Back doesn't toggle it again")

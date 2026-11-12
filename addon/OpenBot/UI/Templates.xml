@@ -1,0 +1,20 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/ ..\..\Blizzard_SharedXML\UI.xsd">
+	<!-- The message box: Enter sends, Shift+Enter adds a line (handled in MainFrame.lua). -->
+	<Frame name="OpenBotComposerTemplate" inherits="ScrollingEditBoxTemplate" virtual="true">
+		<KeyValues>
+			<KeyValue key="useDefaultEnterHandling" value="false" type="boolean"/>
+			<KeyValue key="maxLetters" value="2000" type="number"/>
+			<KeyValue key="fontName" value="ChatFontNormal" type="string"/>
+		</KeyValues>
+	</Frame>
+
+	<!-- One template per kind of list row: ScrollBox recycles rows per template, so
+	     sharing a plain "Frame" between kinds would leave one kind's text on another. -->
+	<Frame name="OpenBotMessageRowTemplate" virtual="true"/>
+	<Frame name="OpenBotNoteRowTemplate" virtual="true"/>
+	<Button name="OpenBotOptionRowTemplate" virtual="true"/>
+	<Button name="OpenBotThreadRowTemplate" virtual="true"/>
+	<Button name="OpenBotGroupHeaderTemplate" virtual="true"/>
+	<Frame name="OpenBotEmptyRowTemplate" virtual="true"/>
+	<Button name="OpenBotDropdownRowTemplate" virtual="true"/>
+</Ui>

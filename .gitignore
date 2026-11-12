@@ -1,3 +1,7 @@
 node_modules/
 __pycache__/
 *.log
+# Built by `npm run build:team` (holds OpenBot code); the installer builds it.
+bridge/dist/
+bridge/team/OPENBOT-LICENSE
+bridge/team/OPENBOT-NOTICE

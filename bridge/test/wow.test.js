@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 // Fake home with Wine prefixes, set before wow.js reads it.
-const home = fs.mkdtempSync(path.join(os.tmpdir(), 't3wow-home-'));
+const home = fs.mkdtempSync(path.join(os.tmpdir(), 'obwow-home-'));
 process.env.HOME = home;
 delete process.env.WINEPREFIX;
 const { findWowInstalls: findAny, parseMacProcesses, isForeverClient } = await import('../src/wow.js');
@@ -104,7 +104,7 @@ test("finds prefixes Faugus Launcher and Lutris recorded, and counts a prefix's 
 
 test("finds Forever on macOS from Battle.net's records and /Applications", () => {
   reset();
-  const sys = fs.mkdtempSync(path.join(os.tmpdir(), 't3wow-sys-'));
+  const sys = fs.mkdtempSync(path.join(os.tmpdir(), 'obwow-sys-'));
   const mac = (opts) => findAny({ platform: 'darwin', system: sys, ...opts });
   touch(path.join(sys, 'Applications/Battle.net.app/Contents/Info.plist'));
   assert.deepEqual(mac().forever, []);

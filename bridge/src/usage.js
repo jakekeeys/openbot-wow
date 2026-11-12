@@ -1,13 +1,12 @@
 // Provider usage for the Usage tab.
 //
-// T3 Code reports rate-limit windows per provider when it can read them. On Omarchy,
-// the shell's Agents panel keeps a usage record per agent in
+// On Omarchy, the shell's Agents panel keeps a usage record per agent in
 // ~/.local/state/omarchy/agents/usage/<id>.json (written by `omarchy-agent-usage-update`):
 // plan tier, limits, today's activity, free reset credits and how to fix a lapsed
 // sign-in. We read those same records, so the game shows exactly what the panel shows
 // without asking the providers again. Only if they go stale (the panel isn't running)
 // do we run the update ourselves, at most every 15 minutes. Without Omarchy the tab
-// shows what T3 reports.
+// is empty: OpenBot doesn't share usage with scripts.
 
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -15,8 +14,23 @@ import os from 'node:os';
 import path from 'node:path';
 import { which } from './voice.js';
 
-// T3 provider instance -> Omarchy usage id.
-const OMARCHY_IDS = { codex: 'codex', claudeAgent: 'claude', claude: 'claude', grok: 'grok', opencode: 'opencode', cursor: 'cursor', antigravity: 'agy', pi: 'local' };
+// OpenBot provider -> Omarchy usage id.
+const OMARCHY_IDS = {
+  codex: 'codex',
+  claude: 'claude',
+  grok: 'grok',
+  opencode: 'opencode',
+  cursor: 'cursor',
+  antigravity: 'agy',
+  pi: 'local',
+  copilot: 'copilot',
+  deepseek: 'deepseek',
+  devin: 'devin',
+  hermes: 'hermes',
+  kimi: 'kimi',
+  muse: 'muse',
+  openrouter: 'openrouter',
+};
 export const RECORDS_DIR = path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local/state'), 'omarchy/agents/usage');
 const STALE_MS = 20 * 60 * 1000;
 const UPDATE_EVERY_MS = 15 * 60 * 1000;
@@ -41,7 +55,7 @@ export class OmarchyUsage {
     this.updating = false;
   }
 
-  // Re-read the records for these T3 instance ids (cheap: only files that changed),
+  // Re-read the records for these provider ids (cheap: only files that changed),
   // and run the updater if they're stale and nobody else is refreshing them.
   refresh(instanceIds) {
     let changed = false;
@@ -98,7 +112,8 @@ export class OmarchyUsage {
   }
 }
 
-// One provider's entry for the snapshot, merging T3's view with Omarchy's record.
+// One provider's entry for the snapshot, from Omarchy's record (and the provider's
+// own limits, when a backend reports them).
 export function mergeUsage(provider, rec, { escape = (s) => s, sec = (iso) => (iso ? Math.floor(Date.parse(iso) / 1000) : undefined) } = {}) {
   const t3 = provider.usageLimits;
   let windows = (t3?.windows || []).map((w) => ({

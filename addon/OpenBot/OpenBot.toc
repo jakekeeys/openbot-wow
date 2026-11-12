@@ -1,0 +1,30 @@
+## Interface: 16001
+## Title: OpenBot
+## Notes: Watch and message your OpenBot agents from inside the game. Needs the openbot-wow bridge running on this computer.
+## Author: Ryan Hughes (T3 Code for WoW); OpenBot port
+## Version: 0.1.0
+## X-License: MIT
+## IconTexture: Interface\AddOns\OpenBot\Media\icon
+## SavedVariables: OpenBotDB
+## AddonCompartmentFunc: OpenBot_OnAddonCompartmentClick
+## AddonCompartmentFuncOnEnter: OpenBot_OnAddonCompartmentEnter
+## AddonCompartmentFuncOnLeave: OpenBot_OnAddonCompartmentLeave
+## OptionalDeps: Blizzard_ObjectiveTracker
+
+Core\Codec.lua
+Core\Crypto.lua
+Core\Init.lua
+Core\Transport.lua
+Core\Store.lua
+UI\Templates.xml
+UI\Widgets.lua
+UI\MainFrame.lua
+UI\ThreadList.lua
+UI\Transcript.lua
+UI\Usage.lua
+UI\Settings.lua
+UI\Tracker.lua
+UI\Toasts.lua
+UI\Minimap.lua
+UI\Gamepad.lua
+Core\Slash.lua

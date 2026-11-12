@@ -16,40 +16,40 @@ let currentKeys = null; // the latest fakeBridge's strip keys: frame() seals wit
 
 
 function tempAddons(slots = 8) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 't3wow-addons-'));
-  fs.mkdirSync(path.join(dir, 'T3Code'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'obwow-addons-'));
+  fs.mkdirSync(path.join(dir, 'OpenBot'));
   new SlotBank(dir, { slots }).install();
   return dir;
 }
 
 function fakeBridge(slots = 8) {
   const dir = tempAddons(slots);
-  const b = new Bridge({ addonsDir: dir, config: { slots }, log: () => {}, stateDir: fs.mkdtempSync(path.join(os.tmpdir(), 't3wow-state-')) });
+  const b = new Bridge({ addonsDir: dir, config: { slots }, log: () => {}, stateDir: fs.mkdtempSync(path.join(os.tmpdir(), 'obwow-state-')) });
   b.proc = { pid: 1, startTicks: 1 };
   currentKeys = b.stripKeys;
   b.persist = { processKey: '1:1', sigCounter: 1, raised: [], handled: {}, slotGuess: 1, gen: 0 };
   const calls = [];
-  b.t3.sendMessage = async (...a) => calls.push(['send', ...a]);
-  b.t3.launchThread = async (...a) => (calls.push(['new', ...a]), { threadId: 'new-thread' });
-  b.t3.settle = async (...a) => calls.push(['settle', ...a]);
-  b.t3.respondAnswers = async (...a) => calls.push(['answer', ...a]);
-  b.t3.threadProjection = async () => ({ messages: [], turnItems: [], runtimeRequests: [], runs: [] });
-  b.t3.threads.set('t1', { id: 't1', title: 'Fix | the build', projectId: 'p1', status: 'running', activityRunStatus: 'running', updatedAt: new Date().toISOString() });
-  b.t3.projects.set('p1', { id: 'p1', title: 'demo' });
+  b.ob.sendMessage = async (...a) => calls.push(['send', ...a]);
+  b.ob.launchThread = async (...a) => (calls.push(['new', ...a]), { threadId: 'new-thread' });
+  b.ob.settle = async (...a) => calls.push(['settle', ...a]);
+  b.ob.respondAnswers = async (...a) => calls.push(['answer', ...a]);
+  b.ob.threadProjection = async () => ({ messages: [], turnItems: [], runtimeRequests: [], runs: [] });
+  b.ob.threads.set('t1', { id: 't1', title: 'Fix | the build', projectId: 'p1', status: 'running', activityRunStatus: 'running', updatedAt: new Date().toISOString() });
+  b.ob.projects.set('p1', { id: 'p1', title: 'demo' });
   b.voice.speak = () => true;
   return { b, dir, calls };
 }
 
 function loadSlot(dir, i) {
-  const file = path.join(dir, `T3Code_S${String(i).padStart(3, '0')}`, 'Inbox.lua');
-  const out = execFileSync('lua5.1', ['-e', `dofile(${JSON.stringify(file)}) print(T3Code_Inbox and T3Code_Inbox.gen or "nil", T3Code_Inbox and T3Code_Inbox.nextSig or "nil", T3Code_Inbox and T3Code_Inbox.threads and T3Code_Inbox.threads[1] and T3Code_Inbox.threads[1].title or "")`]);
+  const file = path.join(dir, `OpenBot_S${String(i).padStart(3, '0')}`, 'Inbox.lua');
+  const out = execFileSync('lua5.1', ['-e', `dofile(${JSON.stringify(file)}) print(OpenBot_Inbox and OpenBot_Inbox.gen or "nil", OpenBot_Inbox and OpenBot_Inbox.nextSig or "nil", OpenBot_Inbox and OpenBot_Inbox.threads and OpenBot_Inbox.threads[1] and OpenBot_Inbox.threads[1].title or "")`]);
   const [gen, nextSig, title] = out.toString().trim().split('\t');
   return { gen: Number(gen), nextSig: Number(nextSig), title };
 }
 
 // Size of the bell file that signal k rings (0 if empty or not created yet).
 function rung(dir, k) {
-  const file = path.join(dir, 'T3Code', 'Signals', String(3991 + ((k - 1) % 8)).padStart(5, '0') + '.wav');
+  const file = path.join(dir, 'OpenBot', 'Signals', String(3991 + ((k - 1) % 8)).padStart(5, '0') + '.wav');
   try {
     return fs.statSync(file).size;
   } catch {
@@ -74,7 +74,7 @@ test('unencrypted frames: the hello is answered, commands are never run', async 
   assert.equal(calls.length, 0);
   assert.ok(b.client && !b.client.encrypted, 'hello accepted');
   b.publishNow('test');
-  const lua = fs.readFileSync(path.join(dir, 'T3Code_S001', 'Inbox.lua'), 'latin1');
+  const lua = fs.readFileSync(path.join(dir, 'OpenBot_S001', 'Inbox.lua'), 'latin1');
   assert.match(lua, new RegExp(`key="${b.stripKeys.hex}"`), 'snapshot carries the keys');
   // A forged "encrypted" frame (wrong keys) is dropped entirely.
   const other = { ...frame(2, [['H', 1, 'sess', 'ui1', 2, 1, 0, 'o', '', '0.1.0'], ['C', 2, 'send', 't1', 'forged']]) };
@@ -125,7 +125,7 @@ test('commands run once, in order, and results are published', async () => {
   assert.deepEqual(calls.map((c) => c[0]), ['send', 'new']);
   assert.equal(calls[0][2], 'hello');
   b.publishNow();
-  const lua = fs.readFileSync(path.join(dir, 'T3Code_S001', 'Inbox.lua'), 'latin1');
+  const lua = fs.readFileSync(path.join(dir, 'OpenBot_S001', 'Inbox.lua'), 'latin1');
   assert.match(lua, /results=\{\{id=1,ok=true,msg="Sent"\},\{id=2,ok=true,open="new-thread"\}/);
   assert.match(lua, /ack=\{ui="ui1",seq=2\}/);
   b.stop();
@@ -133,12 +133,12 @@ test('commands run once, in order, and results are published', async () => {
 
 test('a picked model rides along with new, and model switches a thread', async () => {
   const { b, calls } = fakeBridge();
-  b.t3.setModel = async (...a) => calls.push(['model', ...a]);
+  b.ob.setModel = async (...a) => calls.push(['model', ...a]);
   b.onFrame(frame(1, [['H', 1, 'sess', 'ui1', 1, 1, 0, 'o', 't1', '0.1.0'], ['C', 1, 'new', 'p1', 'go', 'codex', 'gpt-x'], ['C', 2, 'new', 'p1', 'auto'], ['C', 3, 'model', 't1', 'codex', 'gpt-y'], ['C', 4, 'new', 'p1', 'hard', '', '', 'high'], ['C', 5, 'model', 't1', 'codex', 'gpt-y', 'low']]));
   await new Promise((r) => setTimeout(r, 20));
   const news = calls.filter((c) => c[0] === 'new');
   assert.deepEqual(news.find((c) => c[2] === 'go')[4], { model: { instanceId: 'codex', model: 'gpt-x' } });
-  assert.deepEqual(news.find((c) => c[2] === 'auto')[4], {}, 'no pick: T3 picks as before');
+  assert.deepEqual(news.find((c) => c[2] === 'auto')[4], {}, 'no pick: the agent keeps its model');
   assert.deepEqual(news.find((c) => c[2] === 'hard')[4], { effort: 'high' }, 'only a level picked: on the default model');
   const models = calls.filter((c) => c[0] === 'model');
   assert.deepEqual(models[0], ['model', 't1', 'codex', 'gpt-y', undefined]);
@@ -148,30 +148,21 @@ test('a picked model rides along with new, and model switches a thread', async (
 
 test('the model list is only sent while the addon reports a different one', () => {
   const { b } = fakeBridge();
-  const levels = (...ids) => ({ capabilities: { optionDescriptors: [{ id: 'effort', type: 'select', options: ids.map((id, n) => ({ id, label: id.toUpperCase(), isDefault: n === 1 })) }] } });
-  b.t3.local.client.config = {
-    providers: [
-      { instanceId: 'codex', displayName: 'Codex', enabled: true, models: [{ slug: 'a', name: 'A | B', ...levels('low', 'high') }, { slug: 'b', name: 'B', ...levels('low', 'high') }, { slug: 'n', name: 'N' }] },
-      { instanceId: 'claude', displayName: 'Claude  Harness', enabled: true, models: [{ slug: 'o', name: 'O', ...levels('low', 'max') }] },
-    ],
-  };
+  b.ob.local.client.agents.set('a1', { id: 'a1', name: 'A', provider: 'claude', model: 'opus|x', reasoningEffort: 'high' });
+  b.ob.local.client.cfg.models = [{ provider: 'codex', model: 'gpt-x', name: 'GPT X', efforts: ['low', 'high'] }];
   b.onFrame(frame(1, [['H', 1, 'sess', 'ui1', 1, 1, 0, 'o', '', '0.1.0', '8']]));
   const first = b.buildSnapshot().models;
   assert.equal(first.g[0].e, '');
   assert.deepEqual(first.g[0].p, [
-    { i: 'codex', n: 'Codex', m: [{ s: 'a', l: 'A || B', r: 1 }, { s: 'b', l: 'B', r: 1 }, { s: 'n', l: 'N', r: undefined }] },
-    { i: 'claude', n: 'Claude Harness', m: [{ s: 'o', l: 'O', r: 2 }] },
-  ], 'grouped by provider; models with the same levels share a set');
-  assert.deepEqual(first.g[0].x, [
-    { k: 'effort', d: 'high', o: [{ i: 'low', l: 'LOW' }, { i: 'high', l: 'HIGH' }] },
-    { k: 'effort', d: 'max', o: [{ i: 'low', l: 'LOW' }, { i: 'max', l: 'MAX' }] },
-  ]);
+    { i: 'codex', n: 'Codex', m: [{ s: 'gpt-x', l: 'GPT X', r: 1 }] },
+    { i: 'claude', n: 'Claude', m: [{ s: 'opus|x', l: 'opus||x', r: 2 }] },
+  ], 'configured models first, then the ones agents run on');
+  assert.deepEqual(first.g[0].x[0], { k: 'reasoningEffort', d: 'high', o: [{ i: 'low', l: 'Low' }, { i: 'high', l: 'High' }] });
+  assert.equal(first.g[0].x[1].o.length, 5, 'a model without configured levels gets the usual five');
   b.onFrame(frame(2, [['H', 1, 'sess', 'ui1', 1, 1, 0, 'o', '', '0.1.0', '8', first.h]]));
   assert.equal(b.buildSnapshot().models, undefined, 'the addon has this list');
-  b.t3.local.client.config.providers[0].models.push({ slug: 'c', name: 'C' });
+  b.ob.local.client.cfg.models.push({ provider: 'codex', model: 'gpt-y' });
   assert.ok(b.buildSnapshot().models, 'a changed list goes out again');
-  for (const p of b.t3.local.client.config.providers) p.enabled = false;
-  assert.deepEqual(b.buildSnapshot().models.g, [], 'switching off the last provider clears the list');
   b.stop();
 });
 
@@ -236,8 +227,8 @@ test('bells rotate: ringing k empties the bell four behind it', () => {
   for (const k of [9, 10, 11, 12]) assert.ok(rung(dir, k) > 0, `bell ${k}`);
   for (const k of [13, 14, 15, 16]) assert.equal(rung(dir, k), 0, `bell ${k} (same files as 5..8)`);
   bank.prepareBells();
-  assert.ok(fs.statSync(path.join(dir, 'T3Code', 'Signals', '03999.wav')).size > 174762, 'self-test control is long');
-  assert.equal(fs.statSync(path.join(dir, 'T3Code', 'Signals', '04000.wav')).size, 0);
+  assert.ok(fs.statSync(path.join(dir, 'OpenBot', 'Signals', '03999.wav')).size > 174762, 'self-test control is long');
+  assert.equal(fs.statSync(path.join(dir, 'OpenBot', 'Signals', '04000.wav')).size, 0);
   bank.resetSignals();
   for (let k = 1; k <= 8; k++) assert.equal(rung(dir, k), 0);
 });
@@ -261,7 +252,7 @@ test('activity labels and pending questions', () => {
 
 test('lua serializer escapes strings and keeps utf-8', () => {
   const s = luaValue({ a: 'x"y\\z\n\u0001', b: ['é', 1.5, true], 'not ident': 1, end: 2 });
-  const file = path.join(os.tmpdir(), `t3wow-ser-${process.pid}.lua`);
+  const file = path.join(os.tmpdir(), `obwow-ser-${process.pid}.lua`);
   fs.writeFileSync(file, Buffer.from(`local t = ${s}; io.write(t.a, "|", t.b[1], "|", t["not ident"], "|", t["end"])`, 'latin1'));
   const out = execFileSync('lua5.1', [file]);
   fs.rmSync(file);
@@ -306,8 +297,8 @@ test('run summary, plan text and approval details', () => {
 test('screenshots ride along with the next message', async () => {
   const { b, calls } = fakeBridge();
   b.capture.screenshot = async () => ({ data: Buffer.from('jpeg'), name: 's.jpg', mime: 'image/jpeg' });
-  b.t3.uploadImage = async (key, data, name, mime) => ({ type: 'image', id: 'att-1', name, mimeType: mime, sizeBytes: data.length });
-  b.t3.sendMessage = async (...a) => calls.push(['send', ...a]);
+  b.ob.uploadImage = async (key, data, name, mime) => ({ type: 'image', id: 'att-1', name, mimeType: mime, sizeBytes: data.length });
+  b.ob.sendMessage = async (...a) => calls.push(['send', ...a]);
   b.onFrame(frame(1, [['H', 1, 'sess', 'ui1', 1, 1, 0, 'o', 't1', '0.1.0'], ['C', 1, 'shot', 't1']]));
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(b.shots.get('t1').length, 1);
@@ -382,51 +373,39 @@ test('pacing: fast while reading, patient otherwise, reserve kept for alerts', (
 
 test('usage comes from the Omarchy records the Agents panel keeps', async () => {
   const { OmarchyUsage, mergeUsage } = await import('../src/usage.js');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 't3wow-usage-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'obwow-usage-'));
   let changes = 0;
   const u = new OmarchyUsage({ dir, updater: 'definitely-not-a-command', onChange: () => changes++ });
   fs.writeFileSync(path.join(dir, 'claude.json'), JSON.stringify({ tierLabel: 'Max 20x', limits: [{ label: 'Weekly', percent: 0.18, resetsAt: '2026-11-12T00:00:00Z' }], todayPrompts: 3, todayTotalTokens: 2.5e6 }));
-  u.refresh(['claudeAgent', 'codex']);
+  u.refresh(['claude', 'codex']);
   assert.equal(changes, 1);
-  const e = mergeUsage({ instanceId: 'claudeAgent', displayName: 'Claude' }, u.forInstance('claudeAgent'));
+  const e = mergeUsage({ instanceId: 'claude', displayName: 'Claude' }, u.forInstance('claude'));
   assert.equal(e.plan, 'Max 20x');
   assert.deepEqual(e.windows.map((w) => [w.label, w.used]), [['Weekly', 18]]);
   assert.equal(e.today, 'Today: 3 prompts · 3M tokens');
-  u.refresh(['claudeAgent']); // unchanged file: no re-read, no change event
+  u.refresh(['claude']); // unchanged file: no re-read, no change event
   assert.equal(changes, 1);
 });
 
 test('slot manifests are identical and keep the live data out of addon-manager fingerprints', () => {
   const dir = tempAddons(3);
-  const read = (i, f) => fs.readFileSync(path.join(dir, `T3Code_S00${i}`, f), 'utf8');
-  assert.equal(read(1, 'T3Code_S001.toc'), read(3, 'T3Code_S003.toc'));
-  assert.doesNotMatch(read(1, 'T3Code_S001.toc'), /Dependencies|Inbox\.lua/);
+  const read = (i, f) => fs.readFileSync(path.join(dir, `OpenBot_S00${i}`, f), 'utf8');
+  assert.equal(read(1, 'OpenBot_S001.toc'), read(3, 'OpenBot_S003.toc'));
+  assert.doesNotMatch(read(1, 'OpenBot_S001.toc'), /Dependencies|Inbox\.lua/);
   // WowUp/CurseForge follow only self-closing <Script file="..."/> includes.
   const xml = read(1, 'Slot.xml');
   assert.match(xml, /<Script file="Inbox\.lua"><\/Script>/);
   assert.doesNotMatch(xml, /<(?:Include|Script)\s+file=["']((?:(?<!\.\.).)+)["']\s*\/>/is);
 });
 
-test('reopening a settled thread sends the reason T3 Code requires', async () => {
-  const { T3Client } = await import('../src/t3.js');
-  const c = new T3Client({ tokenProvider: async () => 'x' });
-  const sent = [];
-  c.request = async (tag, payload) => sent.push([tag, payload]);
-  await c.unsettle('t1');
-  assert.equal(sent[0][0], 'orchestration.dispatchCommand');
-  assert.equal(sent[0][1].type, 'thread.unsettle');
-  assert.equal(sent[0][1].reason, 'user');
+test('errors reach the game as their first line', () => {
+  assert.equal(friendlyError('Turn on Local scripts\n  at x'), 'Turn on Local scripts');
 });
 
-test('schema errors from T3 Code read as a version mismatch', () => {
-  assert.match(friendlyError('Missing key\n  at ["reason"]'), /didn't accept that request \(it wants "reason"\)/);
-  assert.equal(friendlyError('nothing is running in that thread'), 'nothing is running in that thread');
-});
-
-test('a settled thread shows as settled even with an unreviewed plan', async () => {
-  const { threadStatus } = await import('../src/t3.js');
-  const t = { status: 'completed', hasActionableProposedPlan: true, settledOverride: 'settled' };
+test('a thread waiting on you shows that before settled', async () => {
+  const { threadStatus } = await import('../src/openbot.js');
+  const t = { status: 'completed', settledOverride: 'settled' };
   assert.equal(threadStatus(t), 'settled');
-  assert.equal(threadStatus({ ...t, settledOverride: null }), 'plan');
   assert.equal(threadStatus({ ...t, pendingRuntimeRequest: { kind: 'user_input' } }), 'input');
+  assert.equal(threadStatus({ ...t, settledOverride: null, lastError: 'boom' }), 'failed');
 });

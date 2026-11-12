@@ -2,7 +2,7 @@
 
 Contributions are welcome. This is an early, experimental release, so bug reports from real use are just as valuable as code.
 
-The supported setup is **Omarchy 4.5.0**, **T3 Code Nightly** and **World of Warcraft: Forever** under Proton. macOS with the native client and CachyOS with KDE Plasma are also supported, with less testing. Changes that make other setups work are welcome, as long as they don't break those.
+The supported setup is **Omarchy 4.5.0**, **OpenBot** and **World of Warcraft: Forever** under Proton. macOS with the native client and CachyOS with KDE Plasma are also supported, with less testing. Changes that make other setups work are welcome, as long as they don't break those.
 
 ## Issues
 
@@ -10,9 +10,9 @@ Open an issue for a bug you can reproduce, or for a specific idea. Keep it detai
 
 For a bug, include:
 
-- **Versions**: Omarchy (`omarchy-version`) or macOS (`sw_vers`), T3 Code Nightly (`t3 --version`), t3code-wow (`t3code-wow status`), and your controller if it's involved.
+- **Versions**: Omarchy (`omarchy-version`) or macOS (`sw_vers`), OpenBot (its About screen), openbot-wow (`openbot-wow status`), and your controller if it's involved.
 - **What you did, what you expected, what happened instead.** Steps to reproduce if you have them.
-- **`t3code-wow status --log`** output, and the text from `/t3 report` in game.
+- **`openbot-wow status --log`** output, and the text from `/ob report` in game.
 - **A screenshot or short video** for anything you can see: a layout problem, a wrong state, a notice that didn't appear. It's often the fastest way to explain the problem.
 
 One problem per issue. If you're not sure it's a bug, say so and describe what you saw.
@@ -29,20 +29,20 @@ One problem per issue. If you're not sure it's a bug, say so and describe what y
 ## Development
 
 ```bash
-git clone https://github.com/ryanrhughes/t3code-wow
-cd t3code-wow
+git clone https://github.com/jakekeeys/openbot-wow
+cd openbot-wow
 ./install.sh                 # installs the addon and the bridge from your checkout
 ```
 
-After editing, run `./install.sh` from your checkout, then `/reload` in game. It copies your checkout over the installed copy, puts the addon into the game and restarts the bridge. (`t3code-wow sync` only re-copies the *installed* addon, so it won't pick up your edits.) New files inside the addon load on `/reload`; new addon folders (such as live-update slots) need a full game restart.
+After editing, run `./install.sh` from your checkout, then `/reload` in game. It copies your checkout over the installed copy, puts the addon into the game and restarts the bridge. (`openbot-wow sync` only re-copies the *installed* addon, so it won't pick up your edits.) New files inside the addon load on `/reload`; new addon folders (such as live-update slots) need a full game restart.
 
 Tests:
 
 ```bash
 cd bridge && npm test                                        # bridge, protocol, crypto, Lua/Node agreement
-node tools/snapshot.mjs /tmp/t3snap.lua                      # a real snapshot from your running T3 Code
-lua5.1 tools/smoke.lua addon/T3Code /tmp/t3snap.lua "$(cat /tmp/t3snap.view)"   # drive the addon headlessly
-luajit tools/smoke.lua addon/T3Code /tmp/t3snap.lua "$(cat /tmp/t3snap.view)"   # same, with signed bit ops
+node tools/snapshot.mjs /tmp/obsnap.lua                      # a real snapshot from your OpenBot (read-only)
+lua5.1 tools/smoke.lua addon/OpenBot /tmp/obsnap.lua "$(cat /tmp/obsnap.view)"   # drive the addon headlessly
+luajit tools/smoke.lua addon/OpenBot /tmp/obsnap.lua "$(cat /tmp/obsnap.view)"   # same, with signed bit ops
 ```
 
 On macOS, Homebrew doesn't package Lua 5.1: `brew install luajit` covers the LuaJIT runs, and the `lua5.1` ones need Lua 5.1 built from source.
@@ -58,4 +58,4 @@ Before changing how the addon and bridge talk, read [docs/ARCHITECTURE.md](docs/
 
 ## Security
 
-If you find a security problem, such as a way to send commands to someone's agents or read what they're sending, please report it privately through [GitHub's security advisories](https://github.com/ryanrhughes/t3code-wow/security/advisories/new) rather than a public issue.
+If you find a security problem, such as a way to send commands to someone's agents or read what they're sending, report it privately through [GitHub's security advisories](https://github.com/jakekeeys/openbot-wow/security/advisories/new) rather than in an issue.

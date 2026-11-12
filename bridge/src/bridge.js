@@ -1,11 +1,11 @@
 // The bridge: watches the addon's pixel strip, keeps the game's live-update slots
-// fed with a snapshot of T3 Code, and runs the addon's commands against T3.
+// fed with a snapshot of OpenBot, and runs the addon's commands against OpenBot.
 //
 // Protocol (see docs/ARCHITECTURE.md):
 //   game -> bridge   pixel frame: records split by RS, fields by US
 //       H  proto session ui slot sig gen flags view version     (always first)
 //       C  id verb args...                                      (pending commands)
-//   bridge -> game   T3Code_Inbox = { gen, nextSig, ack = { ui, seq }, threads, view, ... }
+//   bridge -> game   OpenBot_Inbox = { gen, nextSig, ack = { ui, seq }, threads, view, ... }
 //                    written into the next slots the addon will load, then signal
 //                    `nextSig - 1` is raised so the addon loads exactly one slot.
 
@@ -16,17 +16,18 @@ import { createHash } from 'node:crypto';
 import { RS, US } from './codec.js';
 import { StripCapture } from './capture.js';
 import { SlotBank } from './slots.js';
-import { threadStatus, isUnread, effortOf } from './t3.js';
+import { OpenBotClient, threadStatus, isUnread, effortOf } from './openbot.js';
 import { Fleet } from './fleet.js';
-import { tokenProvider } from './auth.js';
+import { STATE_DIR } from './paths.js';
+import { startServers } from './servers.js';
 import { Voice } from './voice.js';
 import { OmarchyUsage, mergeUsage } from './usage.js';
 import { findWowProcess, processKey } from './wow.js';
 import { markdownToWow, markdownToSpeech, firstLine, escapeWow } from './format.js';
 import { loadOrCreateKey, deriveKeys, open as openSealed, ENCRYPTED_VERSION } from './strip-crypto.js';
 
-export const VERSION = '0.3.0';
-export const STATE_DIR = path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local/state'), 't3code-wow');
+export const VERSION = '0.1.0';
+export { STATE_DIR, CONFIG_DIR } from './paths.js';
 
 const sec = (iso) => (iso ? Math.floor(Date.parse(iso) / 1000) : undefined);
 
@@ -35,6 +36,8 @@ const ORDER = { input: 0, plan: 1, working: 2, failed: 3, open: 4, settled: 5 };
 
 export function activityLabel(projection) {
   if (!projection) return null;
+  // OpenBot says what a run is doing in the agent's own words.
+  if (typeof projection.activity === 'string' || projection.activity === null) return projection.activity || null;
   const runId = projection.runs?.at(-1)?.id;
   const items = (projection.turnItems || []).filter((i) => !runId || i.runId === runId);
   const live = items.filter((i) => i.status === 'running' || i.status === 'pending' || i.streaming);
@@ -189,14 +192,9 @@ export function parseFrame(payload) {
   return out;
 }
 
-// T3 Code's schema errors ("Missing key\n  at [\"reason\"]") mean this bridge and
-// the T3 server disagree about a request; say that, not the raw validator text.
+// The first line of an error, short enough for the game's notice.
 export function friendlyError(message) {
   const text = String(message || 'failed');
-  if (/Missing key|Expected .*(Literal|Struct|Union)|is unexpected|Unexpected key/.test(text)) {
-    const field = /at \[\"?([^\]"]+)/.exec(text)?.[1];
-    return `T3 Code didn't accept that request${field ? ` (it wants "${field}")` : ''}. Update t3code-wow to match your T3 Code version.`;
-  }
   return text.split('\n')[0].slice(0, 200);
 }
 
@@ -215,11 +213,10 @@ export class Bridge {
     const installed = this.bank.installedSlotCount();
     if (installed > 0) this.bank.slots = installed;
     this.capture = new StripCapture({ log: this.log, backend: config.capture?.backend || 'auto', region: config.capture?.region || null });
-    this.tokens = tokenProvider({ log: this.log });
-    // Every T3 Code machine we show: this one, plus any added with `t3code-wow env add`.
-    this.t3 = new Fleet({ localTokens: this.tokens, environments: config.environments || [], log: this.log });
-    this.voice = new Voice({ ttsCommand: config.tts?.command || null, rate: config.tts?.rate || 0, log: this.log });
     this.stateDir = stateDir;
+    // This computer's agents; the account's other servers join in start().
+    this.ob = new Fleet({ local: new OpenBotClient({ stateDir, config, log: this.log }), log: this.log });
+    this.voice = new Voice({ ttsCommand: config.tts?.command || null, rate: config.tts?.rate || 0, log: this.log });
     this.stateFile = path.join(stateDir, 'state.json');
     this.statusFile = path.join(stateDir, 'status.json');
     this.persist = this.loadState();
@@ -263,7 +260,7 @@ export class Bridge {
   // ---------------------------------------------------------------------------
 
   async start() {
-    this.log(`t3code-wow bridge ${VERSION}; addons: ${this.addonsDir}; slots: ${this.bank.slots}`);
+    this.log(`openbot-wow bridge ${VERSION}; addons: ${this.addonsDir}; slots: ${this.bank.slots}`);
     try {
       this.bank.prepareBells();
     } catch (err) {
@@ -271,13 +268,14 @@ export class Bridge {
     }
     const v = this.voice.describe();
     this.log(`speech: ${v.tts || 'none'}; dictation: ${v.dictation || 'none'}; capture: ${this.capture.resolveBackend()}`);
-    this.t3.on('state', (s, e) => {
-      this.log(`T3: ${s}${e ? ` (${e})` : ''}`);
+    this.ob.on('state', (s, e) => {
+      this.log(`OpenBot: ${s}${e ? ` (${e})` : ''}`);
       this.markDirty('important');
     });
-    this.t3.on('change', (ev) => this.onT3Change(ev));
-    this.t3.on('config', () => this.markDirty('minor'));
-    this.t3.start();
+    this.ob.on('change', (ev) => this.onChange(ev));
+    this.ob.on('config', () => this.markDirty('minor'));
+    this.ob.start();
+    this.servers = startServers({ fleet: this.ob, stateDir: this.stateDir, config: this.config, log: this.log });
     this.checkProcess();
     this.procTimer = setInterval(() => this.checkProcess(), 4000);
     this.statusTimer = setInterval(() => this.writeStatus(), 3000);
@@ -293,7 +291,8 @@ export class Bridge {
     clearInterval(this.statusTimer);
     clearInterval(this.usageTimer);
     clearTimeout(this.publishTimer);
-    this.t3.stop();
+    this.servers?.stop();
+    this.ob.stop();
     this.voice.hush();
   }
 
@@ -438,7 +437,7 @@ export class Bridge {
       switch (cmd.verb) {
         case 'send': {
           const attachments = await this.takeShots(a0, a0);
-          await this.t3.sendMessage(a0, a1, a2 || 'auto', attachments);
+          await this.ob.sendMessage(a0, a1, a2 || 'auto', attachments);
           msg = attachments.length ? `Sent with ${attachments.length} screenshot${attachments.length === 1 ? '' : 's'}` : 'Sent';
           break;
         }
@@ -463,35 +462,35 @@ export class Bridge {
           const opts = {};
           if (instanceId && model) opts.model = { instanceId, model };
           if (effort) opts.effort = effort;
-          const res = await this.t3.launchThread(a0, a1, attachments, opts);
+          const res = await this.ob.launchThread(a0, a1, attachments, opts);
           msg = 'Thread started';
           if (res?.threadId) this.results.push({ id: cmd.id, ok: true, open: res.threadId });
           break;
         }
         case 'model':
           // model <thread> <instanceId> <model> [<effort>]
-          await this.t3.setModel(a0, a1, a2, cmd.args[3] || undefined);
+          await this.ob.setModel(a0, a1, a2, cmd.args[3] || undefined);
           msg = 'Model changed';
           break;
         case 'stop':
-          await this.t3.interrupt(a0);
+          await this.ob.interrupt(a0);
           msg = 'Stopped';
           break;
         case 'settle':
-          await this.t3.settle(a0);
+          await this.ob.settle(a0);
           break;
         case 'unsettle':
-          await this.t3.unsettle(a0);
+          await this.ob.unsettle(a0);
           break;
         case 'archive':
-          await this.t3.archive(a0);
+          await this.ob.archive(a0);
           break;
         case 'read':
-          await this.t3.visit(a0);
+          await this.ob.visit(a0);
           ok = null; // silent
           break;
         case 'approve':
-          await this.t3.respondApproval(a0, a1, a2 || 'accept');
+          await this.ob.respondApproval(a0, a1, a2 || 'accept');
           break;
         case 'answer': {
           const answers = {};
@@ -501,7 +500,7 @@ export class Bridge {
             if (answers[qid] === undefined) answers[qid] = value;
             else answers[qid] = [].concat(answers[qid], value);
           }
-          await this.t3.respondAnswers(a0, a1, answers);
+          await this.ob.respondAnswers(a0, a1, answers);
           break;
         }
         case 'speak': {
@@ -579,18 +578,18 @@ export class Bridge {
       });
   }
 
-  // Upload the screenshots held for `key` to the machine that owns `routeKey`.
+  // Save the screenshots held for `key` where the agent can open them.
   async takeShots(key, routeKey) {
     const list = this.shots.get(key);
     if (!list?.length) return [];
     this.shots.delete(key);
     const out = [];
-    for (const img of list) out.push(await this.t3.uploadImage(routeKey, img.data, img.name, img.mime));
+    for (const img of list) out.push(await this.ob.uploadImage(routeKey, img.data, img.name, img.mime));
     return out;
   }
 
   async speechFor(threadId, which) {
-    const t = this.t3.threads.get(threadId);
+    const t = this.ob.threads.get(threadId);
     const proj = await this.projection(threadId);
     let text = lastAssistantText(proj);
     if (which === 'plan') {
@@ -627,7 +626,7 @@ export class Bridge {
     }
     const wait = force ? 0 : Math.max(0, minGap - (Date.now() - v.fetchedAt));
     v.inflight = new Promise((r) => setTimeout(r, wait))
-      .then(() => this.t3.threadProjection(threadId))
+      .then(() => this.ob.threadProjection(threadId))
       .then((p) => {
         const prevLabel = activityLabel(v.projection);
         const prevContent = v.contentKey;
@@ -658,7 +657,7 @@ export class Bridge {
     return v.inflight;
   }
 
-  onT3Change(ev) {
+  onChange(ev) {
     if (ev.kind === 'thread') {
       const t = ev.thread;
       const status = threadStatus(t);
@@ -675,7 +674,7 @@ export class Bridge {
       }
     } else {
       if (ev.kind === 'snapshot') {
-        for (const t of this.t3.threads.values()) {
+        for (const t of this.ob.threads.values()) {
           this.prevStatus.set(t.id, threadStatus(t));
           if (ACTIVE.has(threadStatus(t))) this.refreshView(t.id);
         }
@@ -708,17 +707,17 @@ export class Bridge {
   }
 
   usageInstances() {
-    return (this.t3.config?.providers || []).filter((p) => p.enabled).map((p) => p.instanceId);
+    return (this.ob.config?.providers || []).filter((p) => p.enabled).map((p) => p.instanceId);
   }
 
   // ---------------------------------------------------------------------------
   // Snapshot
 
   buildSnapshot() {
-    const t3 = this.t3;
+    const ob = this.ob;
     const projects = [];
     const usedProjects = new Set();
-    let threads = [...t3.threads.values()]
+    let threads = [...ob.threads.values()]
       .map((t) => ({ t, s: threadStatus(t) }))
       .filter(({ s }) => s !== 'archived');
     threads.sort((a, b) => ORDER[a.s] - ORDER[b.s] || Date.parse(b.t.updatedAt) - Date.parse(a.t.updatedAt));
@@ -752,14 +751,18 @@ export class Bridge {
         mi: t.modelSelection?.instanceId,
         re: effortOf(t.modelSelection),
         env: t._env && !t._env.local ? escapeWow(t._env.label) : undefined,
+        // A side thread that can't take a reply from here (this computer's Local scripts reach only main chats).
+        sd: t._main === false && !t._canReply ? true : undefined,
+        // A run the game can stop (servers can; this computer's Local scripts can't).
+        ks: s === 'working' && t._canStop ? true : undefined,
         last: last && ACTIVE.has(s) === false && s !== 'settled' ? escapeWow(firstLine(last, 160)) : undefined,
       };
     });
-    for (const p of t3.projects.values()) {
+    for (const p of ob.projects.values()) {
       if (p.archivedAt) continue;
       const remote = p._env && !p._env.local ? p._env.label : null;
       const name = p.title || p.repositoryIdentity?.displayName || 'Project';
-      const dm = t3.defaultModelFor(p.id);
+      const dm = ob.defaultModelFor(p.id);
       projects.push({
         id: p.id,
         name: escapeWow(remote ? `${name} · ${remote}` : name),
@@ -776,7 +779,7 @@ export class Bridge {
     const viewId = this.client?.view;
     if (viewId) {
       const v = this.views.get(viewId);
-      const t = t3.threads.get(viewId);
+      const t = ob.threads.get(viewId);
       if (v?.projection) {
         const p = v.projection;
         const msgs = (p.messages || []).filter((m) => (m.role === 'user' || m.role === 'assistant') && m.text?.trim());
@@ -811,7 +814,7 @@ export class Bridge {
 
     const usage = [];
     this.omarchyUsage.refresh(this.usageInstances());
-    const enabled = (t3.config?.providers || []).filter((p) => p.enabled && (p.usageLimits || this.omarchyUsage.forInstance(p.instanceId)));
+    const enabled = (ob.config?.providers || []).filter((p) => p.enabled && (p.usageLimits || this.omarchyUsage.forInstance(p.instanceId)));
     for (const p of enabled) {
       usage.push(mergeUsage(p, this.omarchyUsage.forInstance(p.instanceId), { escape: escapeWow, sec }));
     }
@@ -819,19 +822,19 @@ export class Bridge {
     return {
       bridge: {
         version: VERSION,
-        t3: t3.state,
-        t3err: t3.error ? escapeWow(t3.error) : undefined,
-        server: t3.config?.environment?.serverVersion,
-        host: t3.config?.environment?.label,
+        t3: ob.state, // the addon's name for the link to OpenBot
+        t3err: ob.error ? escapeWow(ob.error) : undefined,
+        server: ob.config?.environment?.serverVersion,
+        host: ob.config?.environment?.label,
         tts: voice.tts || undefined,
         dictation: voice.dictation || undefined,
         dictationHint: voice.hint || undefined,
         slots: this.bank.slots,
-        envs: t3.envs.length > 1 ? t3.environments().map((e) => ({ label: escapeWow(e.label), state: e.state, local: e.local, n: e.threads })) : undefined,
+        envs: ob.envs.length > 1 ? ob.environments().map((e) => ({ label: escapeWow(e.label), state: e.state, local: e.local, n: e.threads })) : undefined,
       },
       projects,
       threads: list,
-      older: t3.olderSettled || undefined,
+      older: ob.olderSettled || undefined,
       view,
       usage,
       dict: this.dictation,
@@ -847,7 +850,7 @@ export class Bridge {
   // with its models, and the distinct sets of reasoning levels (`x`) those models
   // point at by 1-based index (`r`), since most models of a provider share one.
   modelsSection() {
-    const groups = this.t3
+    const groups = this.ob
       .modelGroups()
       .filter((g) => g.choices.length)
       .map((g) => {
@@ -1024,7 +1027,7 @@ export class Bridge {
       version: VERSION,
       pid: process.pid,
       at: new Date().toISOString(),
-      t3: { state: this.t3.state, error: this.t3.error, threads: this.t3.threads.size, origin: this.t3.origin, environments: this.t3.environments() },
+      openbot: { state: this.ob.state, error: this.ob.error, threads: this.ob.threads.size, database: this.ob.database?.origin, via: this.ob.local.via, localScripts: this.ob.apiStatus(), servers: this.ob.environments().filter((e) => !e.local), account: this.servers?.status() },
       wow: this.proc ? { pid: this.proc.pid } : null,
       capture: { state: this.captureState, backend: this.capture.resolveBackend(), ...this.capture.stats, lastError: this.capture.lastError },
       addon: this.client

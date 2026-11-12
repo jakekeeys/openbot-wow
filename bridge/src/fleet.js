@@ -1,35 +1,63 @@
-// Several T3 Code machines behind the single-client interface the bridge uses.
+// Several OpenBot servers behind the single-client interface the bridge uses: this
+// computer (read from its database, see openbot.js) and the account's other servers
+// (over OpenBot's relay, see team/src). The game's agent filter lists each server, which
+// is the server switcher.
 //
-// Thread and project ids are made unique across machines: the local machine keeps
-// raw ids (so existing views and saved state stay valid), other machines' ids get
-// a short prefix ("e1~<id>"). Every thread/project object handed out is a shallow
-// copy with `id`/`projectId` rewritten and `_env` pointing at its machine.
+// Ids stay unique across servers: this computer keeps raw ids, so saved state stays
+// valid; another server's ids get its code as a prefix ("s1~<id>"). Every thread and
+// agent handed out is a shallow copy with `id`/`projectId` rewritten and `_env` set.
 
 import { EventEmitter } from 'node:events';
-import { T3Client, modelChoices } from './t3.js';
-import { remoteTokenProvider, remoteOriginProvider } from './envs.js';
 
 const SEP = '~';
 
 export class Fleet extends EventEmitter {
-  constructor({ localTokens, environments = [], log = () => {} }) {
+  constructor({ local, log = () => {} }) {
     super();
     this.log = log;
     this.envs = [];
     this.threads = new Map();
     this.projects = new Map();
-    const local = { code: '', id: 'local', label: 'local', local: true };
-    local.client = new T3Client({ tokenProvider: localTokens, log, label: 'local' });
-    local.tokens = localTokens;
-    this.envs.push(local);
-    for (const e of environments) {
-      if (e.disabled) continue;
-      const env = { code: e.code, id: e.id, label: e.label, local: false, config: e };
-      env.tokens = remoteTokenProvider(e, { log, label: 'WoW bridge' });
-      env.client = new T3Client({ tokenProvider: env.tokens, originProvider: remoteOriginProvider(e), log, label: e.label });
-      this.envs.push(env);
-    }
-    for (const env of this.envs) this.wire(env);
+    // This computer's database client: what the game shows when the relay isn't in use.
+    this.database = local;
+    this.add({ code: '', id: 'local', label: 'this computer', local: true, client: local, via: 'database' });
+  }
+
+  // Show this computer through the relay (`client`, with full features), or with null from its
+  // database again. Thread ids change with the switch, so callers switch rarely.
+  useLocal(client) {
+    const env = this.local;
+    const next = client || this.database;
+    if (env.client === next) return;
+    env.off?.();
+    env.client = next;
+    env.via = client ? 'relay' : 'database';
+    this.log(`this computer: ${client ? 'through the OpenBot relay' : 'from its database'}`);
+    this.wire(env);
+    this.rebuild(env);
+    this.emit('change', { kind: 'snapshot', env });
+    this.emit('config', env);
+    this.emit('state', this.state, this.error, env);
+  }
+
+  // A server: { code, id, label, client }, where client has OpenBotClient's interface.
+  add(env) {
+    if (this.envs.some((e) => e.code === env.code)) throw new Error(`server code ${env.code} is taken`);
+    this.envs.push(env);
+    this.wire(env);
+    return env;
+  }
+
+  // Takes a server out. With `stop: false` its client keeps running, for another use.
+  remove(code, { stop = true } = {}) {
+    const env = this.envs.find((e) => e.code === code && !e.local);
+    if (!env) return;
+    env.off?.();
+    if (stop) env.client.stop();
+    this.envs = this.envs.filter((e) => e !== env);
+    this.drop(env);
+    this.emit('change', { kind: 'snapshot', env });
+    this.emit('config', env);
   }
 
   get local() {
@@ -58,9 +86,13 @@ export class Fleet extends EventEmitter {
     return { ...p, id: this.key(env, p.id), _env: env };
   }
 
-  rebuild(env) {
+  drop(env) {
     for (const [k, t] of this.threads) if (t._env === env) this.threads.delete(k);
     for (const [k, p] of this.projects) if (p._env === env) this.projects.delete(k);
+  }
+
+  rebuild(env) {
+    this.drop(env);
     for (const t of env.client.threads.values()) {
       const w = this.wrapThread(env, t);
       this.threads.set(w.id, w);
@@ -73,13 +105,17 @@ export class Fleet extends EventEmitter {
 
   wire(env) {
     const c = env.client;
-    c.on('state', (s, e) => {
+    const onState = (s, e) => {
       if (!env.local) this.log(`${env.label}: ${s}${e ? ` (${e})` : ''}`);
+      // A server that drops off takes its threads with it.
+      if (!env.local && s !== 'connected') {
+        this.drop(env);
+        this.emit('change', { kind: 'snapshot', env });
+      }
       this.emit('state', this.state, this.error, env);
-    });
-    c.on('unauthorized', () => env.tokens.invalidate?.());
-    c.on('config', () => this.emit('config', env));
-    c.on('change', (ev) => {
+    };
+    const onConfig = () => this.emit('config', env);
+    const onChange = (ev) => {
       if (ev.kind === 'thread') {
         const thread = this.wrapThread(env, ev.thread);
         this.threads.set(thread.id, thread);
@@ -91,27 +127,29 @@ export class Fleet extends EventEmitter {
         this.rebuild(env);
         this.emit('change', { kind: ev.kind, env });
       }
-    });
-    // A machine that drops off takes its threads with it.
-    c.on('state', (s) => {
-      if (s === 'offline' && !env.local) {
-        for (const [k, t] of this.threads) if (t._env === env) this.threads.delete(k);
-        for (const [k, p] of this.projects) if (p._env === env) this.projects.delete(k);
-        this.emit('change', { kind: 'snapshot', env });
-      }
-    });
+    };
+    c.on('state', onState);
+    c.on('config', onConfig);
+    c.on('change', onChange);
+    env.off = () => {
+      c.off('state', onState);
+      c.off('config', onConfig);
+      c.off('change', onChange);
+    };
   }
 
   start() {
     for (const env of this.envs) env.client.start();
+    if (this.local.client !== this.database) this.database.start();
   }
 
   stop() {
     for (const env of this.envs) env.client.stop();
+    if (this.local.client !== this.database) this.database.stop();
   }
 
-  // The local machine decides "connected" for the link indicator; others report
-  // separately in `environments()`.
+  // This computer decides "connected" for the link indicator; servers report in
+  // `environments()`.
   get state() {
     return this.local.client.state;
   }
@@ -125,22 +163,31 @@ export class Fleet extends EventEmitter {
   }
 
   get config() {
-    return this.local.client.config;
+    // Usage records are per provider, so every server's providers count.
+    const providers = new Map();
+    for (const env of this.envs) for (const p of env.client.config?.providers || []) providers.set(p.instanceId, p);
+    return { ...this.local.client.config, providers: [...providers.values()] };
   }
 
   get olderSettled() {
-    return this.envs.reduce((n, e) => n + (e.client.olderSettled || 0), 0);
+    return 0;
   }
 
   environments() {
     return this.envs.map((e) => ({
       code: e.code,
-      label: e.local ? e.client.config?.environment?.label || 'this computer' : e.label,
+      label: e.label,
       local: e.local || undefined,
+      via: e.local ? e.via : undefined,
       state: e.client.state,
       error: e.client.error || undefined,
       threads: e.client.threads.size,
     }));
+  }
+
+  // Local scripts are this computer's database side.
+  apiStatus() {
+    return this.database.apiStatus();
   }
 
   // ---- reads and writes, routed by id ------------------------------------------
@@ -156,8 +203,8 @@ export class Fleet extends EventEmitter {
   }
 
   uploadImage(key, data, name, mime) {
-    const { env } = this.split(key);
-    return env.client.uploadImage(data, name, mime);
+    const { env, id } = this.split(key);
+    return env.client.uploadImage(id, data, name, mime);
   }
 
   async launchThread(projectKey, text, attachments, opts) {
@@ -202,9 +249,9 @@ export class Fleet extends EventEmitter {
     return env.client.visit(id);
   }
 
-  setModel(key, instanceId, model, effort) {
+  setModel(key, provider, model, effort) {
     const { env, id } = this.split(key);
-    return env.client.setModel(id, instanceId, model, effort);
+    return env.client.setModel(id, provider, model, effort);
   }
 
   defaultModelFor(projectKey) {
@@ -212,8 +259,8 @@ export class Fleet extends EventEmitter {
     return env.client.defaultModelFor(id);
   }
 
-  // Each machine's models, keyed by its id prefix ('' for this one).
+  // Each server's models, keyed by its code ('' for this computer).
   modelGroups() {
-    return this.envs.map((env) => ({ code: env.code, choices: modelChoices(env.client.config?.providers) }));
+    return this.envs.map((env) => ({ code: env.code, choices: env.client.modelGroups()[0]?.choices || [] }));
   }
 }

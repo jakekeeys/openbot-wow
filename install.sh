@@ -1,33 +1,28 @@
 #!/bin/bash
-# Install or update T3 Code for World of Warcraft.
+# Install or update OpenBot for World of Warcraft, from this checkout:
 #
-#   curl -fsSL https://raw.githubusercontent.com/ryanrhughes/t3code-wow/main/install.sh | bash
+#   ./install.sh [--wow "/path/to/World of Warcraft"] [--slots N] [--no-service]
 #
-# Run the same command again to update. From a clone, ./install.sh installs that copy.
-# Options (after `bash -s --` when piping): --wow "/path/to/World of Warcraft" --slots N --no-service
-#
-# Copies the bridge and addon to ~/.local/share/t3code-wow, puts `t3code-wow` on your
-# PATH, then runs `t3code-wow install`, which installs the addon into the game, gives
-# the bridge a T3 Code session, starts it as a user service and walks you through the
-# first launch.
+# Run it again to update. It copies the bridge and addon to ~/.local/share/openbot-wow,
+# puts `openbot-wow` on your PATH, then runs `openbot-wow install`, which installs the
+# addon into the game, checks OpenBot, starts the bridge as a user service and walks you
+# through the first launch.
 set -euo pipefail
 
-repo="ryanrhughes/t3code-wow"
-ref="${T3CODE_WOW_REF:-main}"
-dest="${XDG_DATA_HOME:-$HOME/.local/share}/t3code-wow"
+dest="${XDG_DATA_HOME:-$HOME/.local/share}/openbot-wow"
 bin="$HOME/.local/bin"
 
 if ! command -v node >/dev/null 2>&1; then
   if [[ $(uname -s) == "Darwin" ]]; then
-    echo "T3 Code for World of Warcraft needs Node.js 22 or newer: brew install node (or mise use -g node@lts)." >&2
+    echo "OpenBot for World of Warcraft needs Node.js 22.13 or newer: brew install node (or mise use -g node@lts)." >&2
   else
-    echo "T3 Code for World of Warcraft needs Node.js 22 or newer: mise use -g node@lts (or pacman -S nodejs)." >&2
+    echo "OpenBot for World of Warcraft needs Node.js 22.13 or newer: mise use -g node@lts (or pacman -S nodejs)." >&2
   fi
   exit 1
 fi
-major="$(node -p 'process.versions.node.split(".")[0]')"
-if (( major < 22 )); then
-  echo "T3 Code for World of Warcraft needs Node.js 22 or newer; found $(node --version)." >&2
+# The bridge reads OpenBot's database with node:sqlite (Node 22.13 and later).
+if ! node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 13) ? 0 : 1)'; then
+  echo "OpenBot for World of Warcraft needs Node.js 22.13 or newer; found $(node --version)." >&2
   exit 1
 fi
 
@@ -36,43 +31,43 @@ if [[ ${XDG_SESSION_TYPE:-} == "wayland" && :${XDG_CURRENT_DESKTOP:-}: != *:KDE:
   echo "Note: install grim so the bridge can see the game (pacman -S grim)." >&2
 fi
 
-# Install from this checkout, or download the latest version when piped from curl.
-src=""
-here="${BASH_SOURCE[0]:-}"
-if [[ -n $here && -f $here ]]; then
-  here="$(cd "$(dirname "$here")" && pwd)"
-  if [[ -d "$here/bridge" && -d "$here/addon" ]]; then
-    src="$here"
-  fi
+# Install from this checkout.
+src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -d "$src/bridge" || ! -d "$src/addon" ]]; then
+  echo "Run install.sh from an openbot-wow checkout (it needs bridge/ and addon/ next to it)." >&2
+  exit 1
 fi
-if [[ -z $src ]]; then
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
-  echo "Downloading T3 Code for World of Warcraft ($ref)…"
-  url="${T3CODE_WOW_TARBALL:-https://codeload.github.com/$repo/tar.gz/$ref}"
-  if ! curl -fsSL "$url" | tar -xz -C "$tmp" --strip-components=1; then
-    echo "Couldn't download $url." >&2
-    exit 1
+
+# The client for OpenBot's relay (bridge/dist/team.mjs) is built from OpenBot's own client code at a
+# pinned commit, fetched from GitHub, so it isn't in this repository. Build it once, or after an
+# update that changes bridge/team/. Without it, the bridge reads this computer's OpenBot only.
+if [[ ! -f "$src/bridge/dist/team.mjs" || -n "$(find "$src/bridge/team" -newer "$src/bridge/dist/team.mjs" -type f -print -quit)" ]]; then
+  echo "Building the client for OpenBot's relay (fetches OpenBot's client code once)…"
+  if ! (cd "$src/bridge" && npm install --no-audit --no-fund --loglevel=error >/dev/null && npm run --silent build:team); then
+    echo "Note: couldn't build it, so only this computer's agents will show. Run 'npm install && npm run build:team' in bridge/ to see why." >&2
   fi
-  src="$tmp"
 fi
 
 mkdir -p "$dest" "$bin"
 rm -rf "$dest/bridge.new" "$dest/addon.new"
-cp -r "$src/bridge" "$dest/bridge.new"
+mkdir -p "$dest/bridge.new"
+# The checkout's node_modules holds build tools; the installed copy gets only what it runs with.
+tar -C "$src/bridge" --exclude=./node_modules --exclude=./dist/spike.mjs -cf - . | tar -C "$dest/bridge.new" -xf -
 cp -r "$src/addon" "$dest/addon.new"
+# Other OpenBot servers need WebRTC (node-datachannel, a prebuilt native module). Without it the
+# bridge still shows this computer's agents.
+if [[ -f "$dest/bridge.new/dist/team.mjs" ]]; then
+  if ! (cd "$dest/bridge.new" && npm install --omit=dev --no-audit --no-fund --loglevel=error >/dev/null 2>&1); then
+    echo "Note: couldn't install node-datachannel, so only this computer's agents will show (npm install failed)." >&2
+  fi
+fi
 rm -rf "$dest/bridge" "$dest/addon"
 mv "$dest/bridge.new" "$dest/bridge"
 mv "$dest/addon.new" "$dest/addon"
-chmod +x "$dest/bridge/bin/t3code-wow.js"
-ln -sf "$dest/bridge/bin/t3code-wow.js" "$bin/t3code-wow"
+chmod +x "$dest/bridge/bin/openbot-wow.js"
+ln -sf "$dest/bridge/bin/openbot-wow.js" "$bin/openbot-wow"
 if [[ ":$PATH:" != *":$bin:"* ]]; then
-  echo "Note: $bin isn't on your PATH, so run t3code-wow as $bin/t3code-wow (or add $bin to PATH in your shell profile)." >&2
+  echo "Note: $bin isn't on your PATH, so run openbot-wow as $bin/openbot-wow (or add $bin to PATH in your shell profile)." >&2
 fi
 
-# When piped from curl, stdin is this script; give the guided setup the keyboard.
-if [[ ! -t 0 ]] && (: </dev/tty) 2>/dev/null; then
-  node "$dest/bridge/bin/t3code-wow.js" install "$@" </dev/tty
-else
-  node "$dest/bridge/bin/t3code-wow.js" install "$@"
-fi
+node "$dest/bridge/bin/openbot-wow.js" install "$@"

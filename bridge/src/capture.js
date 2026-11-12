@@ -250,7 +250,7 @@ async function kwinCapture(method, signature, args, options, timeout = 4000) {
 }
 
 export const SCREEN_PERMISSION_HELP =
-  `macOS hasn't let the bridge record the screen. Open System Settings > Privacy & Security > Screen & System Audio Recording, turn on ${path.basename(process.execPath)} (${process.execPath}), then restart the bridge with: launchctl kickstart -k gui/${process.getuid()}/t3code-wow`;
+  `macOS hasn't let the bridge record the screen. Open System Settings > Privacy & Security > Screen & System Audio Recording, turn on ${path.basename(process.execPath)} (${process.execPath}), then restart the bridge with: launchctl kickstart -k gui/${process.getuid()}/openbot-wow`;
 
 // ---------------------------------------------------------------------------
 
@@ -325,7 +325,7 @@ export class StripCapture {
   }
 
   tmpFile(name) {
-    if (!this.tmpDir || !fs.existsSync(this.tmpDir)) this.tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 't3code-wow-'));
+    if (!this.tmpDir || !fs.existsSync(this.tmpDir)) this.tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbot-wow-'));
     return path.join(this.tmpDir, name);
   }
 
@@ -429,7 +429,7 @@ export class StripCapture {
   }
 
   // A screenshot of the game window for attaching to a message: JPEG at the
-  // compositor's logical resolution (keeps it well under T3's 10 MB image limit).
+  // compositor's logical resolution (keeps screenshots small).
   async screenshot(wowPid) {
     const backend = this.resolveBackend();
     const name = `wow-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.jpg`;

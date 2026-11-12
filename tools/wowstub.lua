@@ -1,4 +1,4 @@
--- A permissive stand-in for the WoW client API, enough to load the T3Code addon in
+-- A permissive stand-in for the WoW client API, enough to load the OpenBot addon in
 -- plain Lua 5.1 and drive it through login, snapshots and UI interaction.
 -- Unknown methods on frames are no-ops; known getters return plausible values.
 
@@ -162,7 +162,7 @@ local TEMPLATE_CHILDREN = {
 
 -- The strip's cell values (0..7) as currently drawn, in order.
 function Stub.StripCells()
-	local strip = _G.T3CodeLinkStrip
+	local strip = _G.OpenBotLinkStrip
 	local out = {}
 	if not strip or strip._shown == false then return out end
 	for _, f in ipairs(Stub.frames) do
@@ -266,15 +266,15 @@ _G.C_GamePad = {
 Stub.slotCount = 600
 Stub.loadedSlots = {}
 _G.C_AddOns = {
-	GetAddOnMetadata = function(_, key) return key == "Version" and "0.3.0" or nil end,
+	GetAddOnMetadata = function(_, key) return key == "Version" and "0.1.0" or nil end,
 	DoesAddOnExist = function(name)
-		local n = tonumber(name:match("T3Code_S(%d+)"))
+		local n = tonumber(name:match("OpenBot_S(%d+)"))
 		return n ~= nil and n <= Stub.slotCount
 	end,
 	IsAddOnLoaded = function(name) return Stub.loadedSlots[name] or name == "Blizzard_ObjectiveTracker" end,
 	LoadAddOn = function(name)
 		Stub.loadedSlots[name] = true
-		local n = tonumber(name:match("T3Code_S(%d+)"))
+		local n = tonumber(name:match("OpenBot_S(%d+)"))
 		local file = Stub.slotData[n] or Stub.slotData.default
 		if file then
 			local chunk = assert(loadfile(file))

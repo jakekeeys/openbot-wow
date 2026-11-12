@@ -1,13 +1,13 @@
 # Architecture
 
 ```
- WoW: Forever (Wine or macOS)                          t3code-wow bridge (Node, user service)
+ WoW: Forever (Wine or macOS)                          openbot-wow bridge (Node, user service)
  ┌──────────────────────────────┐   pixels   ┌────────────────────────────────────────┐
- │ T3Code addon                 │──────────▶│ capture.js  grim, KWin, import, macOS   │
+ │ OpenBot addon                 │──────────▶│ capture.js  grim, KWin, import, macOS   │
  │  Transport.lua  strip, queue │            │ bridge.js   commands, pacing, snapshots │
- │  Store.lua      snapshot     │◀──────────│ slots.js    Inbox.lua into T3Code_S###  │
+ │  Store.lua      snapshot     │◀──────────│ slots.js    Inbox.lua into OpenBot_S###  │
  │  UI/*           window,      │   files    │             Signals/NNNNN.wav           │
- │                 tracker, pad │            │ t3.js       WebSocket RPC to T3 Code ───┼──▶ T3 Code server
+ │                 tracker, pad │            │ openbot.js  OpenBot's DB (read) + API ──┼──▶ OpenBot
  └──────────────────────────────┘            │ voice.js    speech, dictation           │
                                               └────────────────────────────────────────┘
 ```
@@ -33,7 +33,7 @@ Measured on live Forever 1.60.1 clients (TOC 16001) by
 `Codec.lua` and `codec.js` share one frame format:
 
 ```
-'T' '3' version  seq(2)  len(2)  payload…  fletcher16(2)
+'O' 'B' version  seq(2)  len(2)  payload…  fletcher16(2)
 ```
 
 **Encryption.** The strip is on screen, so streams and recordings capture it. Version 2
@@ -43,11 +43,11 @@ frames (all of them, once the addon has its keys) carry
 nonce(12)  ChaCha20(records)  HMAC-SHA-256(version, seq, nonce, ciphertext)[0..8]
 ```
 
-- The bridge makes a random master key per install (`~/.local/state/t3code-wow/strip.key`,
+- The bridge makes a random master key per install (`~/.local/state/openbot-wow/strip.key`,
   mode 0600) and derives an encryption key and a MAC key from it. Both go into every
   snapshot it writes to the slots. Slot files are never on screen.
 - The addon keeps the keys in file-local variables in `Transport.lua`. They aren't on
-  the exported `T3Code` table and aren't saved. The slot global is cleared on load.
+  the exported `OpenBot` table and aren't saved. The slot global is cleared on load.
 - Nonces are a per-load prefix (time and random bytes) plus a counter, and a frame is
   re-sealed only when its content changes.
 - Version 1 (plaintext) frames are only ever a bare hello with no thread id. The addon
@@ -64,7 +64,7 @@ nonce(12)  ChaCha20(records)  HMAC-SHA-256(version, seq, nonce, ciphertext)[0..8
 
 This keeps out viewers and anything else that can draw on the screen. It can't stop
 another addon in the same game: addons share one Lua state, so a malicious addon could
-drive T3 Code's UI directly. Only install addons you trust.
+drive this addon's UI directly. Only install addons you trust.
 
 The frame is packed into 3-bit cells. Each cell is a 3×3-pixel square with R, G and B
 each fully on or off. The strip is 160 cells per row and up to 40 rows (about 2.4 KB),
@@ -81,7 +81,7 @@ C  id  verb  args…                      (one per queued command)
 
 - `session` is persistent (SavedVariables). `ui` is new every load, so the bridge can
   tell a `/reload` happened.
-- `modelsHash` is the hash of the model list the addon holds (empty until it has one). The bridge sends the list, several KB, only while this differs from its own, so it costs one publish after a `/reload` or a change in T3 Code instead of every publish.
+- `modelsHash` is the hash of the model list the addon holds (empty until it has one). The bridge sends the list, several KB, only while this differs from its own, so it costs one publish after a `/reload` or a change in OpenBot instead of every publish.
 - `flags`:
   - `o`: window open
   - `t`: tracker on
@@ -90,7 +90,7 @@ C  id  verb  args…                      (one per queued command)
   - `s`: sound signals unavailable
 - Verbs:
   - `send`, `new`, `stop`
-  - `model` (`threadId instanceId model [effort]`). `new` takes the same `instanceId model [effort]` after its text; without a model T3 Code's own default applies, and an empty `instanceId model` with an `effort` sets only the reasoning level on that default. `effort` is a level id from the model's list (`low`, `high`, …); without it the thread keeps the options last used with that model
+  - `model` (`threadId instanceId model [effort]`). `new` takes the same `instanceId model [effort]` after its text; without a model the agent keeps its own, and an empty `instanceId model` with an `effort` sets only the reasoning level on that default. `effort` is a level id from the model's list (`low`, `high`, …); without it the thread keeps the options last used with that model
   - `settle`, `unsettle`, `archive`, `read`
   - `approve`, `answer`
   - `speak`, `say`, `hush`, `dictate`
@@ -104,15 +104,15 @@ retries with backoff.
 
 **macOS.** The bridge finds the game window in CoreGraphics' window list (through a JXA script run by `osascript`, so there's nothing to compile) and captures the corner with `screencapture -R`, which returns physical pixels on a Retina display. The strip can start below the window's top: under a windowed game's title bar, or below the notch of a MacBook display in fullscreen. So the decoder searches 40 extra points down instead of guessing either height. Both tools run as the bridge, which needs the Screen Recording permission; the bridge asks for it when it starts.
 
-**KDE Plasma.** KWin doesn't implement wlroots' screencopy, so `grim` can't read it. The bridge uses KWin's D-Bus API through `busctl` (part of systemd): `org.kde.krunner1.Match` on `/WindowsRunner` lists windows captioned "World of Warcraft", `getWindowInfo` gives each one's frame geometry, pid, desktops and minimized state, and `org.kde.KWin.ScreenShot2.CaptureArea` writes the corner's raw pixels (a QImage format KWin names in its reply) into a pipe the bridge passes as fd 3. It asks for native resolution so the cells aren't resampled on a scaled display, and searches 40 pixels down for a windowed game's title bar, as on macOS. Screenshots use `CaptureWindow`, which renders the window even while it's covered. On KWin 6.8 these calls work without the `X-KDE-DBUS-Restricted-Interfaces` grant that Spectacle's desktop file carries; if a later KWin refuses them, the error shows in `t3code-wow status`.
+**KDE Plasma.** KWin doesn't implement wlroots' screencopy, so `grim` can't read it. The bridge uses KWin's D-Bus API through `busctl` (part of systemd): `org.kde.krunner1.Match` on `/WindowsRunner` lists windows captioned "World of Warcraft", `getWindowInfo` gives each one's frame geometry, pid, desktops and minimized state, and `org.kde.KWin.ScreenShot2.CaptureArea` writes the corner's raw pixels (a QImage format KWin names in its reply) into a pipe the bridge passes as fd 3. It asks for native resolution so the cells aren't resampled on a scaled display, and searches 40 pixels down for a windowed game's title bar, as on macOS. Screenshots use `CaptureWindow`, which renders the window even while it's covered. On KWin 6.8 these calls work without the `X-KDE-DBUS-Restricted-Interfaces` grant that Spectacle's desktop file carries; if a later KWin refuses them, the error shows in `openbot-wow status`.
 
 ## Bridge → game: slots and signals
 
-`T3Code_S001…S1200` (1,200 by default) are load-on-demand addons grouped under T3Code in
+`OpenBot_S001…S1200` (1,200 by default) are load-on-demand addons grouped under OpenBot in
 the addon list (`## Group`). They deliberately have no `## Dependencies`: WowUp hides
 an unrecognised load-on-demand folder only when all its dependencies are recognised, and
-T3Code isn't on CurseForge, so a dependency on it made every slot its own "Unknown" row
-(1,200 rows, measured with WowUp 2.24). Without it WowUp shows one "T3 Code" entry.
+OpenBot isn't on CurseForge, so a dependency on it made every slot its own "Unknown" row
+(1,200 rows, measured with WowUp 2.24). Without it WowUp shows one "OpenBot" entry.
 
 Addon managers also fingerprint each folder (a 32-bit hash of the `.toc` and the files it
 lists) and look it up across all of CurseForge. A slot that listed `Inbox.lua` directly
@@ -122,7 +122,7 @@ identical and lists a static `Slot.xml`, which loads `Inbox.lua` with
 `<Script file="Inbox.lua"></Script>`. The scanners only follow self-closing `<Script/>`
 tags, so all slots share one fixed fingerprint that matches nothing on CurseForge
 (checked with WowUp's own hashing code and a rescan).
-Each contains `Inbox.lua`, which assigns `T3Code_Inbox = { … }`. The bridge serializes
+Each contains `Inbox.lua`, which assigns `OpenBot_Inbox = { … }`. The bridge serializes
 plain data with `luaser.js`, so thread text can never become code. All text is escaped
 for WoW markup (`|` → `||`), then markdown is turned into colors and bullets.
 
@@ -175,21 +175,33 @@ with the window closed, and 2 per minute with it open.
 When few slots remain, intervals stretch 2–4×. When they run out, the addon offers
 `/reload`.
 
-## T3 Code side
+## OpenBot side
 
-`t3.js` uses the same API as T3's own clients:
+`openbot.js` hands the bridge the same shapes T3 Code's client did, so the snapshot, pacing and game side are unchanged. A project is an OpenBot agent; a thread is an agent's main chat or one of its side threads.
 
-- **Auth:** a session token from `t3 auth session issue --scope orchestration:read
-  --scope orchestration:operate`, renewed a week before it expires.
-- **Live data:** `POST /api/auth/websocket-ticket/rpc` gets a ticket, then
-  `/ws?orchestrationProtocol=2` opens Effect RPC JSON frames.
-- **Subscriptions:** `orchestration.subscribeShell` (thread list, live) and
-  `subscribeServerConfig` (providers and usage limits).
-- **Thread detail:** `GET /api/orchestration/threads/:id/bounded`, fetched for the
-  viewed thread and for active threads so the tracker can say what they're doing.
-- **Writes:** `orchestration.dispatchCommand` with `message.dispatch`, `run.interrupt`,
-  `runtime-request.respond`, `thread.settle`, `thread.unsettle` and `thread.visit`;
-  plus `orchestration.launchThread`.
+- **Reads:** OpenBot has no API that lists chats, so the bridge opens OpenBot's database (`~/.config/OpenBot/openbot.db`) read-only with `node:sqlite` and polls `pragma data_version` once a second. Tables: `projection_agents` (agents and their main chat), `projection_threads` (title, `active_turn_id` = working), `projection_agent_threads` (side threads), `projection_turns` (last run), `projection_thread_messages` (transcript: `author`, `item_type`, `message_json.text`). `checkSchema` names a missing table or column, since this schema is OpenBot's internal one.
+- **Writes:** OpenBot's Local scripts API, a loopback HTTP API that runs while at least one agent has Local scripts on. Its address and token are in `~/.config/OpenBot/automation/url` and `token`, read again for every request.
+  - `POST /v1/agents/:id/messages`: send, steer and "new" (always the agent's main chat; side threads can't be reached)
+  - `GET /v1/agents/:id/pending`, `POST …/prompts/:requestId/answer`, `POST …/approvals/:requestId/respond`
+  - `POST /v1/agents/:id/settings`: model and reasoning level (per agent, not per thread)
+- **Not available:** stopping a run, replying in a side thread, and OpenBot's model list (the bridge offers the models agents use plus `models` from its config).
+- **Local only:** settled, archived and read marks live in the bridge's `threads.json`. A new run clears settled and archived.
+- **Screenshots** are saved as files in `~/OpenBot/Shared/wow-screenshots` (or `screenshotDir` in the config), and the message names the path so the agent can open it.
+- **Without Local scripts** an agent can still be read, and an open question still shows as "needs you" (from the database); messaging and answering need Local scripts on for that agent. Each message counts toward the agent's Local scripts limit (30 an hour by default).
+
+## Other servers
+
+`src/fleet.js` puts this computer and the account's other servers behind the one interface the bridge uses, with each server's ids prefixed by its code (`s1~…`), as the T3 version did for machines. The addon's agent filter already lists each machine, which makes it the server switcher.
+
+`src/servers.js` runs once the bridge has its own account session (`openbot-wow login`, email code, `~/.config/openbot-wow/account.json`). It lists the account's servers and adds a client for each, skipping one whose agents are this computer's own.
+
+That client, `team/src/host.ts`, is bundled into `dist/team.mjs` with OpenBot's own client code (`packages/team-client`, `contracts`, at the commit pinned in `team/build.mjs`). It reaches a server through OpenBot's relay with `createRemoteTeamPeer`, using `node-datachannel` for WebRTC, and speaks the team API (protocol 9) as the phone app does:
+
+- **After connecting:** `GET /v1/compatibility`, `/v1/agents`, `/v1/agents/models`, `/v1/agents/conversation-reads`, then each agent's `conversation-page` and, with `agent-tasks-v1`, its side threads (`/v1/agent-tasks/list`).
+- **Events keep it current.** `conversation-delta` appends streaming text in place. `runtime-snapshot`, `turn-started` and `turn-completed` say what's working. `prompt`, `approval` and `agent-input-resolved` track what waits for you. Other events mark a chat or task list to read again.
+- **Writes:** `POST /v1/agents/:id/messages` (then `queue/steer` when the agent is working), `/v1/agent-threads/send-reply` for side threads, `/interrupt` with the active turn, `/v1/agent-tasks/stop`, `/v1/prompts/respond`, `/v1/approvals/respond`, `PATCH /v1/agents/:id` for model and reasoning level, and `POST /v1/attachments` for screenshots.
+
+`npm run build:team` fetches the pinned OpenBot commit into `~/.cache/openbot-wow`, links its packages and bundles. When a server moves past protocol 9, bump the pin and rebuild.
 
 ## Controller
 
@@ -203,4 +215,4 @@ The addon never touches the binding-group APIs, which would taint the gamepad ac
 bars, and avoids Blizzard's `Menu` (it caused "blocked action" errors). LB/RB switch
 tabs, X reads aloud, Y dictates, and the right stick scrolls the transcript. Forever has
 no on-screen keyboard, so text input uses dictation, quick replies and option buttons.
-The game menu gets a T3 Code button, and a controller chord opens the window.
+The game menu gets an OpenBot button, and a controller chord opens the window.
