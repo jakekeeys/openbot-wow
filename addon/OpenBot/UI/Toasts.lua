@@ -98,7 +98,7 @@ function N:Show(t, kind)
 	local headline = ({ input = ns.Color("orange", "Needs you"), plan = ns.Color("orange", "Plan ready"),
 		failed = ns.Color("red", "Failed"), open = ns.Color("green", "Finished") })[kind] or ""
 	f.Title:SetText(t.title)
-	f.Text:SetText(headline .. ns.Color("grey", "  ·  " .. ns.Store:ProjectName(t.p)) .. (t.last and ("\n" .. t.last) or ""))
+	f.Text:SetText(headline .. ns.Color("grey", "  ·  " .. ns.Store:ProjectLabel(t.p)) .. (t.last and ("\n" .. t.last) or ""))
 	-- Grow the frame to fit the text (up to four lines of the reply).
 	local h = 14 + f.Title:GetStringHeight() + 4 + f.Text:GetStringHeight() + 14
 	f:SetHeight(math.max(64, math.ceil(h)))

@@ -236,7 +236,7 @@ test('messages, steering, screenshots, side-thread replies, stop and model chang
   c.stop();
 });
 
-test('in the game, servers appear in the agent filter and their runs can be stopped', { skip }, async () => {
+test('in the game, servers come with their codes and their runs can be stopped', { skip }, async () => {
   const fake = fakeHost();
   const remote = await connected(fake);
   const local = Object.assign(new (await import('node:events')).EventEmitter(), {
@@ -256,16 +256,24 @@ test('in the game, servers appear in the agent filter and their runs can be stop
   assert.equal(ada.ks, true, 'a working run on a server can be stopped');
   assert.equal(ada.env, 'Homelab');
   assert.equal(snap.threads.find((t) => t.id === 's1~t:task-1').sd, undefined, 'its side threads take replies');
-  assert.ok(snap.projects.some((p) => p.name === 'Ada · Homelab'));
+  const ada2 = snap.projects.find((p) => p.id === 's1~ada');
+  assert.deepEqual([ada2.name, ada2.sv, ada2.env], ['Ada', 's1', 'Homelab'], 'plain name, with the server code to match on');
+  assert.equal(snap.threads.find((t) => t.id === 's1~a:ada').sv, 's1');
+  assert.deepEqual(snap.bridge.envs.map((e) => e.c), ['', 's1'], 'each server carries its code');
   b.servers = { status: () => ({ signedIn: true, error: null }), stop() {} };
   remote.setState('offline', 'The connection to the server was lost.');
   let bridge = b.buildSnapshot().bridge;
   assert.equal(bridge.relay, 'on');
   assert.equal(bridge.via, 'database');
-  assert.deepEqual(bridge.envs.find((e) => e.label === 'Homelab'), { label: 'Homelab', state: 'offline', local: undefined, n: 3, err: 'The connection to the server was lost.' });
+  assert.deepEqual(bridge.envs.find((e) => e.label === 'Homelab'), { c: 's1', label: 'Homelab', state: 'offline', local: undefined, n: 3, err: 'The connection to the server was lost.' });
   b.servers = { status: () => ({ signedIn: false, error: null }), stop() {} };
   bridge = b.buildSnapshot().bridge;
   assert.equal(bridge.relay, 'off', 'not signed in');
+  assert.ok(bridge.envs, 'two servers are listed even when signed out');
+  b.ob.remove('s1');
+  assert.equal(b.buildSnapshot().bridge.envs, undefined, 'signed out with only this computer: no server picker');
+  b.servers = { status: () => ({ signedIn: true, error: null }), stop() {} };
+  assert.deepEqual(b.buildSnapshot().bridge.envs.map((e) => [e.c, e.label]), [['', 'this computer']], 'signed in with one server: it is still named');
   remote.stop();
   b.stop();
 });

@@ -1,4 +1,4 @@
--- Left side of the window: project filter and the grouped thread list.
+-- Left side of the window: server and agent pickers, and the grouped thread list.
 
 local _, ns = ...
 local UI = ns.UI
@@ -84,7 +84,7 @@ local function CreateRow(button)
 		if not t then return end
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 		GameTooltip:SetText(t.title, 1, 0.82, 0, 1, true)
-		GameTooltip:AddLine(ns.Store:ProjectName(t.p), 0.7, 0.7, 0.7)
+		GameTooltip:AddLine(ns.Store:ProjectLabel(t.p), 0.7, 0.7, 0.7)
 		GameTooltip:AddLine(t.l or ns.Store.StatusText(t.s), 1, 1, 1, true)
 		if t.br then GameTooltip:AddLine("Branch: " .. t.br, 0.6, 0.8, 1) end
 		if t.m then
@@ -116,7 +116,7 @@ local function InitRow(button, ed)
 	button.Dot:SetShown(color ~= nil)
 	if color then button.Dot:SetVertexColor(color[1], color[2], color[3]) end
 	button.Status:SetText(ns.Color(ns.Store.StatusColor(t.s), ns.Store.StatusText(t.s)))
-	local sub = ns.Store:ProjectName(t.p)
+	local sub = ns.Store:ProjectLabel(t.p)
 	if t.s == "working" or t.s == "input" then sub = t.l or sub end
 	button.Sub:SetText(sub)
 	if t.s == "working" and t.st then
@@ -131,13 +131,17 @@ local function InitRow(button, ed)
 end
 
 function L:Create(parent)
+	self.parent = parent
+	-- The server first: this computer, each OpenBot server, or all of them.
+	local server = UI.Dropdown(parent, LIST_W_DEFAULT, function(value) L:PickServer(value) end)
+	server:Hide()
+	self.server = server
+
 	local dd = UI.Dropdown(parent, LIST_W_DEFAULT, function(value)
 		ns.db.settings.project = value
 		L:Refresh(true)
 		ns.Main:Refresh()
 	end)
-	dd:SetPoint("TOPLEFT", 8, -8)
-	dd:SetPoint("TOPRIGHT", -10, -8)
 	self.dropdown = dd
 
 	local search = CreateFrame("EditBox", nil, parent, "SearchBoxTemplate")
@@ -152,8 +156,6 @@ function L:Create(parent)
 	self.search = search
 
 	local scrollBox = CreateFrame("Frame", nil, parent, "WowScrollBoxList")
-	scrollBox:SetPoint("TOPLEFT", 4, -70)
-	scrollBox:SetPoint("BOTTOMRIGHT", -18, 4)
 	local scrollBar = CreateFrame("EventFrame", nil, parent, "MinimalScrollBar")
 	scrollBar:SetPoint("TOPLEFT", scrollBox, "TOPRIGHT", 4, 0)
 	scrollBar:SetPoint("BOTTOMLEFT", scrollBox, "BOTTOMRIGHT", 4, 0)
@@ -170,6 +172,8 @@ function L:Create(parent)
 					frame.Text:SetPoint("RIGHT", -8, 0)
 					frame.Text:SetJustifyH("LEFT")
 				end
+				-- A note (an offline server's error) takes up to three lines.
+				frame.Text:SetMaxLines(ed.tall and 3 or 1)
 				frame.Text:SetText(ed.empty)
 			end)
 		else
@@ -178,34 +182,126 @@ function L:Create(parent)
 	end)
 	view:SetElementExtentCalculator(function(_, ed)
 		if ed.header then return 28 end
-		if ed.empty then return 24 end
+		if ed.empty then return ed.tall and 52 or 24 end
 		return 46
 	end)
 	ScrollUtil.InitScrollBoxListWithScrollBar(scrollBox, scrollBar, view)
 	self.scrollBox, self.scrollBar, self.view = scrollBox, scrollBar, view
+	self:Layout(false)
+end
+
+-- The server picker shows once the bridge reports servers (it's signed in); the agent picker,
+-- search and list move down under it.
+function L:Layout(withServer)
+	if self.laidOut == withServer then return end
+	self.laidOut = withServer
+	local parent, top = self.parent, -8
+	self.server:SetShown(withServer)
+	if withServer then
+		self.server:ClearAllPoints()
+		self.server:SetPoint("TOPLEFT", 8, top)
+		self.server:SetPoint("TOPRIGHT", -10, top)
+		top = top - 30
+	end
+	self.dropdown:ClearAllPoints()
+	self.dropdown:SetPoint("TOPLEFT", 8, top)
+	self.dropdown:SetPoint("TOPRIGHT", -10, top)
+	self.scrollBox:ClearAllPoints()
+	self.scrollBox:SetPoint("TOPLEFT", parent, "TOPLEFT", 4, top - 62)
+	self.scrollBox:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -18, 4)
+end
+
+function L:PickServer(value)
+	local s = ns.db.settings
+	s.server = value
+	local e = value ~= "all" and ns.Store:Server(value)
+	if e then s.serverLabel = ns.Store.ServerName(e) end
+	-- The agent filter only keeps an agent on the new server.
+	local p = s.project ~= "all" and ns.Store.projectsById[s.project]
+	if p and value ~= "all" and ns.Store.ServerOf(p) ~= value then s.project = "all" end
+	L:Refresh(true)
+	ns.Main:Refresh()
+end
+
+-- Filters saved before the server picker were "m:<label>" agent filters.
+function L:MigrateFilter()
+	local s = ns.db.settings
+	local label = type(s.project) == "string" and s.project:match("^m:(.+)$")
+	if not label then return end
+	s.project = "all"
+	if label == "local" then
+		s.server = ""
+		return
+	end
+	for _, e in ipairs(ns.Store:Servers() or {}) do
+		if e.label == label then
+			s.server, s.serverLabel = ns.Store.ServerCode(e), e.label
+			return
+		end
+	end
+end
+
+local function Cap(text)
+	return (text:gsub("^%l", string.upper))
+end
+
+function L:SetupServers()
+	local servers = ns.Store:Servers()
+	self:Layout(servers ~= nil)
+	if not servers then return end
+	local s = ns.db.settings
+	local options = { { value = "all", label = "All servers" } }
+	local found = s.server == nil or s.server == "all"
+	for _, e in ipairs(servers) do
+		local code = ns.Store.ServerCode(e)
+		local name = Cap(ns.Store.ServerName(e))
+		local state = e.state ~= "connected" and (e.state == "connecting" and "connecting…" or "offline") or nil
+		table.insert(options, { value = code, label = name .. (state and ns.Color("orange", "  ·  " .. state) or ""), tip = e.err })
+		if code == s.server then found = true end
+	end
+	-- A picked server that isn't reported now (removed, or the bridge is starting) stays listed.
+	if not found then
+		table.insert(options, { value = s.server, label = (s.serverLabel or "Server") .. ns.Color("orange", "  ·  not connected") })
+	end
+	self.server:SetOptions(options, s.server or "all")
+	local e = ns.Store:SelectedServer() and ns.Store:Server(s.server)
+	self.server.tipBody = (e and e.err) or "Pick a server: its agents and threads. Right-click or scroll to step."
 end
 
 function L:SetupDropdown()
+	local server = ns.Store:SelectedServer()
 	local options = { { value = "all", label = "All agents" } }
-	-- With more than one machine, filters per machine come first.
-	local machines = ns.Store.data.bridge and ns.Store.data.bridge.envs
-	if machines then
-		for _, e in ipairs(machines) do
-			table.insert(options, { value = "m:" .. (e["local"] and "local" or e.label), label = "Everything on " .. e.label })
+	for _, p in ipairs(ns.Store.data.projects) do
+		if p.act and (server == nil or ns.Store.ServerOf(p) == server) then
+			table.insert(options, { value = p.id, label = ns.Store:ProjectLabel(p.id) })
 		end
 	end
-	for _, p in ipairs(ns.Store.data.projects) do
-		if p.act then table.insert(options, { value = p.id, label = p.name }) end
-	end
-	self.dropdown:SetOptions(options, ns.db.settings.project)
+	self.dropdown:SetOptions(options, ns.Store:SelectedAgent() or "all")
+end
+
+-- The note at the top of a picked server that has no threads to show because it's not connected.
+local function ServerNote(server)
+	local e = ns.Store:Server(server)
+	if e and e.state == "connected" then return nil end
+	local name = e and Cap(ns.Store.ServerName(e)) or (ns.db.settings.serverLabel or "This server")
+	if e and e.state == "connecting" then return ns.Color("orange", "Connecting to " .. name .. "…") end
+	local text = ns.Color("orange", name .. " is offline.")
+	if e and e.err then text = text .. " " .. e.err end
+	return text .. ns.Color("grey", " Its threads come back when it reconnects.")
 end
 
 function L:Refresh(force)
 	if not self.scrollBox then return end
 	local s = ns.db.settings
-	if s.project ~= "all" and not s.project:find("^m:") and not ns.Store.projectsById[s.project] and ns.Store.applied > 0 then s.project = "all" end
+	self:MigrateFilter()
+	-- An agent that's gone from a connected server is forgotten; one on a server that's offline
+	-- (or not reported yet) stays picked for when it's back.
+	if s.project ~= "all" and not ns.Store.projectsById[s.project] and ns.Store.applied > 0 then
+		local e = ns.Store:Server(ns.Store.EnvOf(s.project))
+		if not ns.Store:Servers() or (e and e.state == "connected") then s.project = "all" end
+	end
 	local key = table.concat({
-		ns.Store.applied, s.project, tostring(s.collapsed.working), tostring(s.collapsed.open),
+		ns.Store.applied, s.project, tostring(s.server), tostring(s.collapsed.working), tostring(s.collapsed.open),
 		tostring(s.collapsed.settled), tostring(ns.viewId), ns.Main.mode, self.query or "",
 	}, ":")
 	if key == self.key and not force then
@@ -216,11 +312,16 @@ function L:Refresh(force)
 		return
 	end
 	self.key = key
+	self:SetupServers()
 	self:SetupDropdown()
 
-	local groups = ns.Store:Groups(s.project, self.query)
+	local server = ns.Store:SelectedServer()
+	local groups = ns.Store:Groups(ns.Store:SelectedAgent() or "all", self.query, server)
 	local dp = CreateDataProvider()
-	for _, g in ipairs(GROUPS) do
+	local note = server and ns.Store.applied > 0 and ServerNote(server)
+	local any = #groups.working + #groups.open + #groups.settled > 0
+	if note then dp:Insert({ empty = note, tall = true }) end
+	for _, g in ipairs(note and not any and {} or GROUPS) do
 		local list = groups[g.key]
 		local collapsed = s.collapsed[g.key]
 		if #list > 0 or g.key ~= "settled" then

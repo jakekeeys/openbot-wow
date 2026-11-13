@@ -10,7 +10,7 @@ It's a port of Ryan Hughes's [T3 Code for World of Warcraft](https://github.com/
 ## What it does
 
 - **OpenBot window** (`/ob`): every agent's main chat and its open side threads, grouped into Working, Open and Settled. Read a thread, message an agent, steer a working one, stop a run, answer its questions and approve its requests.
-- **Server switcher**: the agent filter lists **Everything on <server>** for this computer and each OpenBot server you belong to. Agents on a server show as "Name · Server".
+- **Server picker**: above the agent list, pick this computer, one of your OpenBot servers, or all of them. The agent list, the thread list and Message Agent then cover only that server. An offline server stays in the picker with its error. With all servers shown, agents on a server read "Name · Server"; the tracker and notices name the server whenever it isn't the one you picked.
 - **Quest tracker**: what's running, what needs you and what just finished, under your quests.
 - **Notices**: a toast, a sound and a chat line when an agent finishes or needs you. They wait until combat ends.
 - **Models**: pick an agent's model and reasoning level from the server's own model list.
@@ -63,7 +63,8 @@ To update: `git pull && ./install.sh`, then `/reload`.
 
 - `/ob` opens the window. The minimap button and the game menu do too, and from a controller: hold both triggers and press Back.
 - Pick a thread on the left to read it; type below to reply. A message to a working agent steers its current run.
-- **Message Agent** writes to an agent's main chat. Pick the agent (and, if you like, its model) in the header.
+- Pick a server at the top of the list, then an agent if you like. Your picks are kept.
+- **Message Agent** writes to an agent's main chat on the picked server: the agent you filtered to, else the last one you messaged there. Pick another agent (and, if you like, its model) in the header.
 - The ✕ next to Back stops the run you're reading.
 - `/ob selftest` checks the link step by step; `/ob report` puts diagnostics and a screenshot into the message box.
 

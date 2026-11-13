@@ -304,11 +304,134 @@ local threadRows = 0
 for _, r in ipairs(ns.ThreadList.scrollBox._rows) do if r.ed.thread then threadRows = threadRows + 1 end end
 check(threadRows == 0, "search hides non-matching threads")
 ns.ThreadList.query = nil
-local groups = ns.Store:Groups("m:local")
-check(#groups.working + #groups.open + #groups.settled > 0, "machine filter (this computer) keeps local threads")
-groups = ns.Store:Groups("m:foundry")
-check(#groups.working + #groups.open + #groups.settled == 0, "machine filter (foundry) excludes local threads")
+local groups = ns.Store:Groups("all", nil, "")
+check(#groups.working + #groups.open + #groups.settled > 0, "server filter (this computer) keeps local threads")
+groups = ns.Store:Groups("all", nil, "s9")
+check(#groups.working + #groups.open + #groups.settled == 0, "server filter (another server) excludes local threads")
 ns.ThreadList:Refresh(true)
+
+-- Servers: a picker of its own, and the agent list, the thread list and Message Agent scoped to it.
+do
+	local S = ns.Store
+	local L = ns.ThreadList
+	local s = ns.db.settings
+	check(not L.server:IsShown(), "servers: no server picker while only this computer is reported")
+	-- This computer plus two servers: Home Bot (connected) and CIO CTO Consulting (offline).
+	local snap = {}
+	for k, v in pairs(data) do snap[k] = v end
+	snap.threads, snap.projects = {}, {}
+	for _, t in ipairs(data.threads) do table.insert(snap.threads, t) end
+	for _, p in ipairs(data.projects) do table.insert(snap.projects, p) end
+	table.insert(snap.projects, { id = "s1~ada", name = "Ada", env = "Home Bot", sv = "s1", act = true })
+	table.insert(snap.projects, { id = "s1~bo", name = "Bo", env = "Home Bot", sv = "s1", act = true })
+	table.insert(snap.threads, { id = "s1~a:ada", title = "Ada", p = "s1~ada", s = "working", l = "Building", st = time() - 30, sv = "s1", env = "Home Bot" })
+	table.insert(snap.threads, { id = "s1~a:bo", title = "Bo", p = "s1~bo", s = "open", u = time() - 60, sv = "s1", env = "Home Bot" })
+	local bridge = {}
+	for k, v in pairs(data.bridge or {}) do bridge[k] = v end
+	bridge.relay, bridge.via = "on", "relay"
+	bridge.envs = {
+		{ c = "", label = "this computer", state = "connected", ["local"] = true, n = #data.threads },
+		{ c = "s1", label = "Home Bot", state = "connected", n = 2 },
+		{ c = "s2", label = "CIO CTO Consulting", state = "offline", n = 0, err = "The connection to the server was lost." },
+	}
+	snap.bridge = bridge
+	local function apply()
+		snap.gen = (ns.db.gen or 0) + 1
+		snap.now = time()
+		ns.Transport:Apply(snap)
+		L:Refresh(true)
+	end
+	local function values(dd)
+		local out = {}
+		for _, o in ipairs(dd.options) do if not o.header then table.insert(out, o.value) end end
+		return table.concat(out, ",")
+	end
+	local function rows()
+		local threads, notes = {}, {}
+		for _, r in ipairs(L.scrollBox._rows) do
+			if r.ed.thread then table.insert(threads, r.ed.thread.id) end
+			if r.ed.tall then table.insert(notes, r.ed.empty) end
+		end
+		return threads, notes
+	end
+	local strip = function(t) return (t:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
+	local localAgent = data.projects[1] and data.projects[1].id
+
+	s.server, s.project = "all", "all"
+	apply()
+	check(L.server:IsShown(), "servers: the picker shows once servers are reported")
+	check(values(L.server) == "all,,s1,s2", "servers: All, this computer and each server: " .. values(L.server))
+	check(strip(L.server.options[4].label):find("CIO CTO Consulting", 1, true) and strip(L.server.options[4].label):find("offline", 1, true), "servers: an offline server stays in the picker")
+	check(S:ProjectLabel("s1~ada") == "Ada · Home Bot", "servers: All view names a server's agents")
+	check(localAgent == nil or S:ProjectLabel(localAgent) == S:ProjectName(localAgent), "servers: All view leaves this computer's agents plain")
+	check(values(L.dropdown):find("s1~ada", 1, true) ~= nil and (localAgent == nil or values(L.dropdown):find(localAgent, 1, true) ~= nil), "servers: All view lists every server's agents")
+
+	-- Pick Home Bot.
+	L.server.value = "s1"
+	L:PickServer("s1")
+	check(s.server == "s1" and s.serverLabel == "Home Bot", "servers: the pick is saved by code")
+	check(values(L.dropdown) == "all,s1~ada,s1~bo", "servers: the agent list is that server's agents: " .. values(L.dropdown))
+	check(S:ProjectLabel("s1~ada") == "Ada", "servers: no server suffix while one server is picked")
+	local list = rows()
+	check(#list == 2 and list[1]:find("^s1~") and list[2]:find("^s1~"), "servers: the thread list is that server's threads")
+	-- Tracker: every server, named where it isn't the picked one.
+	if localAgent then
+		check(S:ServerSuffix("") == "this computer", "servers: this computer is named on lines while another server is picked")
+	end
+	check(S:ServerSuffix("s1") == nil, "servers: the picked server isn't named")
+	ns.Tracker:Refresh()
+
+	-- Message Agent opens on the picked server's agent, not the first agent anywhere.
+	s.lastProject = localAgent
+	ns.Main:StartNewThread()
+	check(ns.Main.newProject == "s1~ada", "servers: Message Agent picks an agent on the picked server: " .. tostring(ns.Main.newProject))
+	local opts = values(ns.Main.frame.Pages.threads.Right.Header.Project)
+	check(opts == "s1~ada,s1~bo", "servers: Message Agent lists only that server's agents: " .. opts)
+	-- The agent filter scopes Message Agent too.
+	s.project = "s1~bo"
+	ns.Main:StartNewThread()
+	check(ns.Main.newProject == "s1~bo", "servers: Message Agent follows the agent filter")
+	ns.Main:Back()
+
+	-- An agent from another server doesn't carry over.
+	L.server.value = ""
+	L:PickServer("")
+	check(s.project == "all", "servers: switching server drops an agent filter from the old one")
+	check(values(L.dropdown):find("s1~", 1, true) == nil, "servers: this computer lists only its own agents")
+	check(S:ProjectLabel("s1~ada") == "Ada · Home Bot" and S:ServerSuffix("") == nil, "servers: lines from Home Bot are named while this computer is picked")
+
+	-- An offline server: picked, its error shown, an empty list, and nobody to message.
+	L.server.value = "s2"
+	L:PickServer("s2")
+	local threads, notes = rows()
+	check(#threads == 0, "servers: an offline server shows an empty list")
+	check(#notes == 1 and strip(notes[1]):find("offline", 1, true) and strip(notes[1]):find("connection to the server was lost", 1, true), "servers: the list says it's offline, with the error")
+	check(values(L.dropdown) == "all", "servers: an offline server has no agents to pick")
+	ns.Main:StartNewThread()
+	check(ns.Main.newProject == nil, "servers: Message Agent picks nobody on an offline server")
+	ns.Main.composer._text = "hello?"
+	local before = #ns.Transport.queue
+	ns.Main:Send()
+	check(#ns.Transport.queue == before, "servers: nothing is sent to an offline server")
+	ns.Main:Back()
+
+	-- A picked server the bridge doesn't report right now stays picked, named from last time.
+	bridge.envs = { bridge.envs[1], bridge.envs[2] }
+	apply()
+	check(s.server == "s2" and values(L.server) == "all,,s1,s2", "servers: a server that's gone from the report stays in the picker")
+	check(strip(L.server.Text:GetText()):find("CIO CTO Consulting", 1, true) ~= nil, "servers: named from when it was last seen")
+
+	-- Old "m:<label>" agent filters become server picks.
+	s.project, s.server = "m:Home Bot", "all"
+	L:Refresh(true)
+	check(s.server == "s1" and s.project == "all", "servers: an old machine filter becomes a server pick")
+
+	-- Back to how the rest of the test expects it.
+	s.server, s.project = "all", "all"
+	ns.Transport:Apply((function() data.gen = (ns.db.gen or 0) + 1; data.now = time(); return data end)())
+	L:Refresh(true)
+	check(not L.server:IsShown(), "servers: the picker hides again with only this computer")
+end
 
 -- Report: diagnostics in the box + a screenshot request
 ns.Main.composer._text = ""

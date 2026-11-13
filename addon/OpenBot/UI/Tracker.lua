@@ -82,7 +82,7 @@ local function CreateLine(parent)
 		if not t then return end
 		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
 		GameTooltip:SetText(t.title, 1, 0.82, 0, 1, true)
-		GameTooltip:AddLine(ns.Store:ProjectName(t.p), 0.7, 0.7, 0.7)
+		GameTooltip:AddLine(ns.Store:ProjectLabel(t.p), 0.7, 0.7, 0.7)
 		if t.last then GameTooltip:AddLine(t.last, 1, 1, 1, true) end
 		GameTooltip:AddLine("Click to open", 0.5, 0.5, 0.5)
 		GameTooltip:Show()
@@ -216,7 +216,9 @@ function K:Refresh(resetPosition)
 			shown = shown + 1
 			local b = Line(shown)
 			b.thread, b.action = t, nil
-			b.Title:SetText(t.title)
+			-- The tracker shows every server: name the server where the list wouldn't make it obvious.
+			local server = ns.Store:ServerSuffix(ns.Store.ServerOf(t))
+			b.Title:SetText(t.title .. (server and ns.Color("grey", "  ·  " .. server) or ""))
 			local hc = OBJECTIVE_TRACKER_COLOR and OBJECTIVE_TRACKER_COLOR.Header
 			if hc then b.Title:SetTextColor(hc.r, hc.g, hc.b) else b.Title:SetTextColor(1, 0.82, 0) end
 			local sub

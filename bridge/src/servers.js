@@ -121,7 +121,16 @@ export function startServers({ fleet, stateDir, config = {}, log = () => {}, loa
         if (!wanted(host, config)) continue;
         const code = codeFor(host.hostId);
         keep.add(code);
-        if (fleet.envs.some((e) => e.code === code)) continue;
+        const known = fleet.envs.find((e) => e.code === code);
+        if (known) {
+          // A server renamed in OpenBot shows its new name.
+          if (known.label !== host.name) {
+            log(`server ${known.label} is now called ${host.name}`);
+            known.label = host.name;
+            fleet.emit('config', known);
+          }
+          continue;
+        }
         const client = team.createHostClient({ directory, host, stateDir: path.join(stateDir, 'servers', code), config, log });
         const env = fleet.add({ code, id: host.hostId, label: host.name, local: false, client });
         watchForSelf(env);

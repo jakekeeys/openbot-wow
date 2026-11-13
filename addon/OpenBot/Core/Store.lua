@@ -71,20 +71,82 @@ function Store:ProjectName(id)
 	return p and p.name or ""
 end
 
--- Threads grouped for the sidebar, filtered by project.
--- projectFilter: "all", a project id, or "m:<machine>" ("m:local" for this one).
-function Store:Groups(projectFilter, query)
+---------------------------------------------------------------------------
+-- Servers: this computer ("" ) and each OpenBot server the bridge reaches (s1, s2…).
+
+-- The servers the bridge reports, or nil when it shows this computer only (not signed in).
+function Store:Servers()
+	local envs = self.data.bridge and self.data.bridge.envs
+	if type(envs) ~= "table" or #envs == 0 then return nil end
+	return envs
+end
+
+function Store.ServerCode(e)
+	return e.c or (e["local"] and "") or e.label
+end
+
+function Store:Server(code)
+	for _, e in ipairs(self:Servers() or {}) do
+		if Store.ServerCode(e) == code then return e end
+	end
+end
+
+function Store.ServerName(e)
+	return e["local"] and "this computer" or e.label
+end
+
+-- The server a thread or agent is on: the bridge's code, or the prefix of its id.
+function Store.ServerOf(item)
+	if not item then return "" end
+	return item.sv or Store.EnvOf(item.id)
+end
+
+-- The picked server's code, or nil for all of them. A picked server that isn't reported right
+-- now (offline, or the bridge is starting) stays picked: its list is empty until it's back.
+function Store:SelectedServer()
+	local s = ns.db and ns.db.settings.server
+	if s == nil or s == "all" or not self:Servers() then return nil end
+	return s
+end
+
+-- The agent the list is filtered to, or nil: only an agent that's on the picked server.
+function Store:SelectedAgent()
+	local id = ns.db and ns.db.settings.project
+	if not id or id == "all" then return nil end
+	local p = self.projectsById[id]
+	if not p then return nil end
+	local server = self:SelectedServer()
+	if server and Store.ServerOf(p) ~= server then return nil end
+	return id
+end
+
+-- The server to name next to an item, or nil. With all servers shown: every server but this
+-- computer. With one picked: only another server's items (the tracker and notices show them all).
+function Store:ServerSuffix(code)
+	if not self:Servers() then return nil end
+	local selected = self:SelectedServer()
+	if code == (selected or "") then return nil end
+	local e = self:Server(code)
+	return e and Store.ServerName(e) or nil
+end
+
+-- An agent's name, with its server where the rule above wants one: "Ada · Home Bot".
+function Store:ProjectLabel(id)
+	local name = self:ProjectName(id)
+	local p = id and self.projectsById[id]
+	local suffix = self:ServerSuffix(p and Store.ServerOf(p) or Store.EnvOf(id))
+	return suffix and (name .. " · " .. suffix) or name
+end
+
+-- Threads grouped for the sidebar, filtered by server (nil: all), agent ("all" or an id) and
+-- search text.
+function Store:Groups(projectFilter, query, server)
 	local groups = { working = {}, open = {}, settled = {} }
-	local machine = projectFilter and projectFilter:match("^m:(.+)$")
 	for _, t in ipairs(self.data.threads) do
-		local match
-		if machine then
-			match = (machine == "local" and not t.env) or t.env == machine
-		else
-			match = projectFilter == "all" or projectFilter == nil or t.p == projectFilter
-		end
+		local match = (server == nil or Store.ServerOf(t) == server)
+			and (projectFilter == nil or projectFilter == "all" or t.p == projectFilter)
 		if match and query and query ~= "" then
-			match = t.title:lower():find(query, 1, true) or self:ProjectName(t.p):lower():find(query, 1, true)
+			match = t.title:lower():find(query, 1, true) or self:ProjectLabel(t.p):lower():find(query, 1, true)
 		end
 		if match then
 			local g = GROUP_OF[t.s] or "open"

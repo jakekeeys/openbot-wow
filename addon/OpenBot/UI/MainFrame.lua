@@ -178,7 +178,7 @@ function M:CreateThreadsPage(page)
 	header.Archive:Hide()
 	UI.Tooltip(header.Archive, "Archive", "Hide this thread from the list here. It stays in OpenBot, and comes back when the agent works in it again.")
 	header.Project = UI.Dropdown(header, 176, function(value)
-		M.newProject = value
+		M.newProject = value ~= "" and value or nil
 		M.newModel, M.newEffort = nil, nil
 		M:Refresh()
 	end)
@@ -396,12 +396,9 @@ function M:StartNewThread(projectId)
 	self:SaveDraft()
 	self.mode = "new"
 	self.newModel, self.newEffort = nil, nil
-	local filter = ns.db.settings.project
-	self.newProject = projectId or (filter ~= "all" and filter) or ns.db.settings.lastProject
-	if not ns.Store.projectsById[self.newProject or ""] then
-		local first = ns.Store.data.projects[1]
-		self.newProject = first and first.id
-	end
+	-- The agent: the one asked for, else the list's agent filter, else the last one messaged,
+	-- as long as it's on the picked server; otherwise that server's first agent.
+	self.newProject = (projectId and ns.Store.projectsById[projectId] and projectId) or self:ScopedAgent(ns.Store:SelectedAgent() or ns.db.settings.lastProject)
 	self:LoadDraft()
 	if self.page ~= "threads" then self:ShowPage("threads") end
 	self:Open()
@@ -441,7 +438,13 @@ function M:Send(textOverride)
 	end
 	if self.mode == "new" then
 		if not self.newProject then
-			ns.Print("Pick an agent first.")
+			local server = ns.Store:SelectedServer()
+			local e = server and ns.Store:Server(server)
+			if server and (not e or e.state ~= "connected") then
+				ns.Print((e and ns.Store.ServerName(e) or ns.db.settings.serverLabel or "That server") .. " is offline, so it has no agents to message right now.")
+			else
+				ns.Print("Pick an agent first.")
+			end
 			return
 		end
 		ns.db.settings.lastProject = self.newProject
@@ -686,7 +689,7 @@ function M:Refresh()
 			f.Subtitle:SetText(t.title)
 			local status = ns.Color(ns.Store.StatusColor(t.s), ns.Store.StatusText(t.s))
 			local age = (t.s == "working" and t.st) and ns.Duration(time() - t.st) or ns.Ago(t.u)
-			header.Text:SetText(string.format("%s  ·  %s  ·  %s", status, ns.Store:ProjectName(t.p), age))
+			header.Text:SetText(string.format("%s  ·  %s  ·  %s", status, ns.Store:ProjectLabel(t.p), age))
 			header.Action:SetShown(true)
 			header.Action:SetText(t.s == "settled" and "Reopen" or "Settle")
 			header.Archive:SetShown(t.s == "settled")
@@ -873,10 +876,30 @@ function M:PickModel(value)
 	self:Refresh()
 end
 
+-- `id` if it's an agent on the picked server, else that server's first agent (nil: none).
+function M:ScopedAgent(id)
+	local server = ns.Store:SelectedServer()
+	local function onServer(p) return p and (server == nil or ns.Store.ServerOf(p) == server) end
+	if id and onServer(ns.Store.projectsById[id]) then return id end
+	for _, p in ipairs(ns.Store.data.projects) do
+		if onServer(p) then return p.id end
+	end
+	return nil
+end
+
+-- The agents of the picked server (all of them, named with their server, when none is picked).
 function M:SetupProjectDropdown()
+	local server = ns.Store:SelectedServer()
+	-- The picked server changed, or its agents did: keep to an agent on it.
+	if not (self.newProject and self:ScopedAgent(self.newProject) == self.newProject) then
+		self.newProject = self:ScopedAgent(ns.Store:SelectedAgent() or ns.db.settings.lastProject)
+	end
 	local options = {}
-	for _, p in ipairs(ns.Store.data.projects) do table.insert(options, { value = p.id, label = p.name }) end
-	self.frame.Pages.threads.Right.Header.Project:SetOptions(options, M.newProject)
+	for _, p in ipairs(ns.Store.data.projects) do
+		if server == nil or ns.Store.ServerOf(p) == server then table.insert(options, { value = p.id, label = ns.Store:ProjectLabel(p.id) }) end
+	end
+	if #options == 0 then table.insert(options, { value = "", label = ns.Color("grey", "No agents") }) end
+	self.frame.Pages.threads.Right.Header.Project:SetOptions(options, M.newProject or "")
 end
 
 ---------------------------------------------------------------------------

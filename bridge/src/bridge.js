@@ -751,6 +751,8 @@ export class Bridge {
         mi: t.modelSelection?.instanceId,
         re: effortOf(t.modelSelection),
         env: t._env && !t._env.local ? escapeWow(t._env.label) : undefined,
+        // The server's code: '' for this computer, s1, s2… for the others (stable across restarts).
+        sv: t._env?.code ?? '',
         // A side thread that can't take a reply from here (this computer's Local scripts reach only main chats).
         sd: t._main === false && !t._canReply ? true : undefined,
         // A run the game can stop (servers can; this computer's Local scripts can't).
@@ -765,8 +767,10 @@ export class Bridge {
       const dm = ob.defaultModelFor(p.id);
       projects.push({
         id: p.id,
-        name: escapeWow(remote ? `${name} · ${remote}` : name),
+        // The plain name: the addon adds the server where it needs one.
+        name: escapeWow(name),
         env: remote ? escapeWow(remote) : undefined,
+        sv: p._env?.code ?? '',
         act: usedProjects.has(p.id) || undefined,
         // The model a new thread here gets unless the player picks one.
         dm: dm?.instanceId && dm.model ? modelKey(dm.instanceId, dm.model) : undefined,
@@ -830,8 +834,10 @@ export class Bridge {
         dictation: voice.dictation || undefined,
         dictationHint: voice.hint || undefined,
         slots: this.bank.slots,
-        envs: ob.envs.length > 1
-          ? ob.environments().map((e) => ({ label: escapeWow(e.label), state: e.state, local: e.local, n: e.threads, err: e.state !== 'connected' && e.error ? escapeWow(String(e.error).slice(0, 90)) : undefined }))
+        // Every server, with its code, whenever the bridge is signed in (even with one), so the
+        // addon's server picker can name each one, including those that are offline.
+        envs: ob.envs.length > 1 || (this.relayState() && this.relayState() !== 'off')
+          ? ob.environments().map((e) => ({ c: e.code, label: escapeWow(e.label), state: e.state, local: e.local, n: e.threads, err: e.state !== 'connected' && e.error ? escapeWow(String(e.error).slice(0, 90)) : undefined }))
           : undefined,
         // How this computer is reached ('relay' or 'database'), and the bridge's OpenBot sign-in:
         // 'on', 'off' (not signed in) or 'error' (signed in, but the server list fails).

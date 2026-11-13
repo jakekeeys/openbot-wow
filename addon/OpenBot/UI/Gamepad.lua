@@ -69,6 +69,7 @@ function G:Candidates()
 	if main.page == "threads" then
 		local page = f.Pages.threads
 		if page.Left:IsShown() then
+			if ns.ThreadList.server:IsShown() then add(ns.ThreadList.server) end
 			add(ns.ThreadList.dropdown)
 			local box = ns.ThreadList.scrollBox
 			box:ForEachFrame(function(frame, ed)
@@ -313,7 +314,7 @@ function G:Zone(cur)
 	if main.page ~= "threads" then return nil end
 	local w = cur.w
 	local right = main.frame.Pages.threads.Right
-	if w == ns.ThreadList.dropdown or cur.box == ns.ThreadList.scrollBox then return "list" end
+	if w == ns.ThreadList.server or w == ns.ThreadList.dropdown or cur.box == ns.ThreadList.scrollBox then return "list" end
 	local h = right.Header
 	if w == main.composer or w == h.Action or w == h.Archive or w == h.Project or w == h.Model or w == h.Effort or cur.box == ns.Transcript.scrollBox then
 		return "convo"

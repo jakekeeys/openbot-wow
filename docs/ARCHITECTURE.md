@@ -191,7 +191,9 @@ When few slots remain, intervals stretch 2–4×. When they run out, the addon o
 
 ## Other servers
 
-`src/fleet.js` puts this computer and the account's other servers behind the one interface the bridge uses, with each server's ids prefixed by its code (`s1~…`), as the T3 version did for machines. The addon's agent filter already lists each machine, which makes it the server switcher.
+`src/fleet.js` puts this computer and the account's other servers behind the one interface the bridge uses, with each server's ids prefixed by its code (`s1~…`), as the T3 version did for machines. The code is stable across restarts (`servers.json`).
+
+The snapshot carries that code: on each server in `bridge.envs` (`c`, `""` for this computer, sent whenever the bridge is signed in, offline servers included, with their error), and on each thread and agent (`sv`). Agent names come plain. The addon matches on the code: its server picker (`ThreadList.lua`, saved as `settings.server`) scopes the agent list, the thread list and Message Agent, and `Store:ProjectLabel` adds "· Server" only in the all-servers view, or on tracker lines and notices from another server than the picked one.
 
 `src/servers.js` runs once the bridge has its own account session (`openbot-wow login`, email code, `~/.config/openbot-wow/account.json`). It lists the account's servers and adds a client for each, skipping one whose agents are this computer's own.
 

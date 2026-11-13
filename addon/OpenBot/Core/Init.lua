@@ -90,6 +90,7 @@ local DEFAULTS = {
 		tts = "auto", -- auto | game | system | off
 		autoRead = false,
 		project = "all",
+		server = "all", -- the picked server: "all", "" (this computer), or a server code
 		quickReplies = true,
 		collapsed = { settled = true },
 		strip = true,

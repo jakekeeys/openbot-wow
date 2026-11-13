@@ -100,13 +100,12 @@ test('signed-in servers join the fleet with stable codes, and this computer is s
   const local = new FakeClient([{ id: 'mine', name: 'Mine' }]);
   const fleet = new Fleet({ local });
   const clients = {};
+  const hosts = [
+    { hostId: 'h-homelab', name: 'Homelab', role: 'owner', devicePublicKey: 'k' },
+    { hostId: 'h-self', name: 'Desk', role: 'owner', devicePublicKey: 'k' },
+  ];
   const team = {
-    createDirectory: () => ({
-      listHosts: async () => [
-        { hostId: 'h-homelab', name: 'Homelab', role: 'owner', devicePublicKey: 'k' },
-        { hostId: 'h-self', name: 'Desk', role: 'owner', devicePublicKey: 'k' },
-      ],
-    }),
+    createDirectory: () => ({ listHosts: async () => hosts.map((h) => ({ ...h })) }),
     createHostClient: ({ host }) => {
       const c = new FakeClient(host.hostId === 'h-self' ? [{ id: 'mine', name: 'Mine' }] : [{ id: 'y1', name: 'Y' }]);
       clients[host.hostId] = c;
@@ -127,6 +126,12 @@ test('signed-in servers join the fleet with stable codes, and this computer is s
   assert.deepEqual(saved.codes, { 'h-homelab': 's1', 'h-self': 's2' });
   assert.deepEqual(saved.self, ['h-self']);
 
+  // A renamed server shows its new name on the next server list.
+  hosts[0].name = 'Home Bot';
+  await servers.refresh();
+  assert.deepEqual(fleet.envs.map((e) => e.label), ['this computer', 'Home Bot']);
+  assert.equal(fleet.envs[1].code, 's1', 'same code');
+
   // The relay drops: the game keeps it for a moment, then reads the database again.
   clients['h-self'].state = 'offline';
   clients['h-self'].emit('state', 'offline', 'lost');
@@ -144,7 +149,7 @@ test('signed-in servers join the fleet with stable codes, and this computer is s
   const again = startServers({ fleet: fleet2, stateDir, loadTeam: async () => team, account: () => ({ sessionToken: 'tok' }) });
   await new Promise((r) => setTimeout(r, 30));
   again.stop();
-  assert.deepEqual(fleet2.envs.map((e) => e.label), ['this computer', 'Homelab']);
+  assert.deepEqual(fleet2.envs.map((e) => e.label), ['this computer', 'Home Bot']);
   assert.equal(fleet2.local.via, 'relay');
 });
 
