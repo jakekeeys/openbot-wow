@@ -753,6 +753,8 @@ export class Bridge {
         un: s !== 'closed' && isUnread(t) ? true : undefined,
         // An agent's main chat: its permanent conversation, which can't be closed.
         mc: t._main ? true : undefined,
+        // A channel: a group chat of several agents (and people). It can't be closed from the game.
+        ch: t._channel ? true : undefined,
         // A side thread that closing only hides in the game (this computer without a sign-in).
         lc: !t._main && t._closeLocal ? true : undefined,
         br: t.branch ? escapeWow(t.branch) : undefined,
@@ -780,6 +782,7 @@ export class Bridge {
         name: escapeWow(name),
         env: remote ? escapeWow(remote) : undefined,
         sv: p._env?.code ?? '',
+        ch: p.channel ? true : undefined,
         act: usedProjects.has(p.id) || undefined,
         // The model a new thread here gets unless the player picks one.
         dm: dm?.instanceId && dm.model ? modelKey(dm.instanceId, dm.model) : undefined,
@@ -803,7 +806,8 @@ export class Bridge {
           const text = markdownToWow(m.text, { maxChars: m.role === 'assistant' ? 4000 : 1500 });
           budget -= text.length;
           if (budget < 0 && out.length > 0) break;
-          out.unshift({ r: m.role === 'user' ? 'u' : 'a', t: text, at: sec(m.createdAt), live: m.streaming || undefined, n: i + 1 });
+          // `w`: who said it, in a channel (several agents and people); not set for your own messages.
+          out.unshift({ r: m.role === 'user' ? 'u' : 'a', t: text, at: sec(m.createdAt), live: m.streaming || undefined, n: i + 1, w: m.who ? escapeWow(m.who) : undefined });
         }
         view = {
           id: viewId,

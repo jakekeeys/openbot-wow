@@ -115,7 +115,7 @@ local function InitRow(button, ed)
 	button.Dot:SetShown(color ~= nil)
 	if color then button.Dot:SetVertexColor(color[1], color[2], color[3]) end
 	button.Status:SetText(ns.Color(ns.Store.StatusColor(t.s), ns.Store.StatusText(t.s)))
-	local sub = ns.Store:ProjectLabel(t.p)
+	local sub = t.ch and ns.Store:ChannelLabel(t) or ns.Store:ProjectLabel(t.p)
 	if t.s == "working" or t.s == "input" then sub = t.l or sub end
 	button.Sub:SetText(sub)
 	if t.s == "working" and t.st then
@@ -270,10 +270,16 @@ end
 function L:SetupDropdown()
 	local server = ns.Store:SelectedServer()
 	local options = { { value = "all", label = "All agents" } }
+	local channels = {}
 	for _, p in ipairs(ns.Store.data.projects) do
 		if p.act and (server == nil or ns.Store.ServerOf(p) == server) then
-			table.insert(options, { value = p.id, label = ns.Store:ProjectLabel(p.id) })
+			table.insert(p.ch and channels or options, { value = p.id, label = ns.Store:ProjectLabel(p.id) })
 		end
+	end
+	-- Channels after the agents, under their own heading.
+	if #channels > 0 then
+		table.insert(options, { header = true, label = "Channels" })
+		for _, o in ipairs(channels) do table.insert(options, o) end
 	end
 	self.dropdown:SetOptions(options, ns.Store:SelectedAgent() or "all")
 end

@@ -691,9 +691,9 @@ function M:Refresh()
 			f.Subtitle:SetText(t.title)
 			local status = ns.Color(ns.Store.StatusColor(t.s), ns.Store.StatusText(t.s))
 			local age = (t.s == "working" and t.st) and ns.Duration(time() - t.st) or ns.Ago(t.u)
-			header.Text:SetText(string.format("%s  ·  %s  ·  %s", status, ns.Store:ProjectLabel(t.p), age))
+			header.Text:SetText(string.format("%s  ·  %s  ·  %s", status, t.ch and ns.Store:ChannelLabel(t) or ns.Store:ProjectLabel(t.p), age))
 			-- Close and Reopen are for side threads; a main chat can't be closed.
-			local closable = not t.mc
+			local closable = not t.mc and not t.ch
 			header.Action:SetShown(closable)
 			header.Action:SetText(t.s == "closed" and "Reopen" or "Close")
 			local withModel = self:SetupModelDropdown()
@@ -712,7 +712,7 @@ function M:Refresh()
 			end
 			local pickers = (withModel and header.Model:GetWidth() + 4 or 0) + (withEffort and header.Effort:GetWidth() + 4 or 0)
 			header.Text:SetPoint("RIGHT", (closable and -110 or -10) - pickers, 0)
-			local placeholder = t.sd and "Reply to this side thread in OpenBot" or (t.s == "working" and "Steer the agent" or "Message the agent")
+			local placeholder = t.sd and "Reply to this side thread in OpenBot" or t.ch and "Message the channel" or (t.s == "working" and "Steer the agent" or "Message the agent")
 			self:SetPlaceholder(placeholder .. "  (Shift+Enter for a new line)")
 		else
 			f.Subtitle:SetText(ns.Color("grey", "No thread selected"))
@@ -885,7 +885,8 @@ end
 -- `id` if it's an agent on the picked server, else that server's first agent (nil: none).
 function M:ScopedAgent(id)
 	local server = ns.Store:SelectedServer()
-	local function onServer(p) return p and (server == nil or ns.Store.ServerOf(p) == server) end
+	-- Message Agent is for agents: a channel is written to from its own thread.
+	local function onServer(p) return p and not p.ch and (server == nil or ns.Store.ServerOf(p) == server) end
 	if id and onServer(ns.Store.projectsById[id]) then return id end
 	for _, p in ipairs(ns.Store.data.projects) do
 		if onServer(p) then return p.id end
@@ -902,7 +903,7 @@ function M:SetupProjectDropdown()
 	end
 	local options = {}
 	for _, p in ipairs(ns.Store.data.projects) do
-		if server == nil or ns.Store.ServerOf(p) == server then table.insert(options, { value = p.id, label = ns.Store:ProjectLabel(p.id) }) end
+		if not p.ch and (server == nil or ns.Store.ServerOf(p) == server) then table.insert(options, { value = p.id, label = ns.Store:ProjectLabel(p.id) }) end
 	end
 	if #options == 0 then table.insert(options, { value = "", label = ns.Color("grey", "No agents") }) end
 	self.frame.Pages.threads.Right.Header.Project:SetOptions(options, M.newProject or "")

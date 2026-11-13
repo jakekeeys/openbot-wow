@@ -93,6 +93,8 @@ export interface Thread {
   _main: boolean;
   _agent: string;
   _task: string | null;
+  // A channel's id: the thread is the channel's group chat (no agent of its own).
+  _channel: string | null;
   _wireThread: string | null;
   _canReply: boolean;
   _canStop: boolean;
@@ -273,4 +275,105 @@ export function answersBody(answers: Record<string, string | string[]>) {
 
 export function decisionOf(decision: string) {
   return String(decision || "").startsWith("accept") ? "accept" : "decline";
+}
+
+// ---- channels (channel-chats-v1) ------------------------------------------------------------
+// A channel is a group chat of several agents and people. The game shows each as one thread.
+
+export interface Channel {
+  id: string;
+  name: string;
+  revision: number;
+  createdAt: string;
+  unreadCount: number;
+  activeTasks: number;
+  members: string[];
+  lastMessage: { authorName: string; text: string; at: string } | null;
+}
+
+export interface ChannelTask {
+  id: string;
+  parentTaskId: string | null;
+  ownerAgentId: string | null;
+  instruction: string;
+  state: string;
+}
+
+export interface ChannelMessage {
+  id: string;
+  sequence: number;
+  superseded: boolean;
+  author: { kind: "member" | "agent" | "coordinator"; id: string; name: string };
+  message: WireMessage;
+}
+
+const num = (v: Json, d = 0) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+
+// The channels that aren't archived.
+export function toChannels(body: Json): Channel[] {
+  const list = Array.isArray(body) ? body : [];
+  return list.filter(isRec).flatMap((c) => {
+    const id = str(c.id);
+    if (!id || c.archived === true) return [];
+    const last = isRec(c.lastMessage) ? c.lastMessage : null;
+    return [{
+      id,
+      name: str(c.name) || "Channel",
+      revision: num(c.revision),
+      createdAt: str(c.createdAt) || "",
+      unreadCount: num(c.unreadCount),
+      activeTasks: num(c.activeTasks),
+      members: Array.isArray(c.members) ? c.members.filter(isRec).map((m) => str(m.agentId)).filter((x): x is string => !!x) : [],
+      lastMessage: last ? { authorName: str(last.authorName) || "", text: str(last.text) || "", at: str(last.at) || "" } : null,
+    }];
+  });
+}
+
+export function toChannelPage(body: Json): { messages: ChannelMessage[]; tasks: ChannelTask[]; throughSequence: number } {
+  const page = isRec(body) ? body : {};
+  const messages = (Array.isArray(page.messages) ? page.messages : []).filter(isRec).flatMap((m) => {
+    const inner = isRec(m.message) ? m.message : null;
+    const author = isRec(m.author) ? m.author : null;
+    if (!inner || !author || typeof m.id !== "string") return [];
+    const kind = author.kind === "member" || author.kind === "agent" || author.kind === "coordinator" ? author.kind : "agent";
+    return [{ id: m.id, sequence: num(m.sequence), superseded: m.superseded === true, author: { kind, id: str(author.id) || "", name: str(author.name) || "" }, message: inner as unknown as WireMessage }];
+  });
+  messages.sort((a, b) => a.sequence - b.sequence);
+  const tasks = (Array.isArray(page.tasks) ? page.tasks : []).filter(isRec).flatMap((t) => {
+    const id = str(t.id);
+    return id ? [{ id, parentTaskId: str(t.parentTaskId), ownerAgentId: str(t.ownerAgentId), instruction: str(t.instruction) || "", state: str(t.state) || "" }] : [];
+  });
+  return { messages, tasks, throughSequence: num(page.throughSequence) };
+}
+
+export const ACTIVE_CHANNEL_TASK = new Set(["queued", "running", "waiting", "paused"]);
+
+// The channel's messages for the game, each with its speaker (`who`). Your own messages have
+// none, so the game shows them as yours; other people's carry their name.
+export function channelTranscript(messages: ChannelMessage[], me: string | null) {
+  const out: { id: string; role: "user" | "assistant"; text: string; createdAt: string; who?: string; streaming?: true }[] = [];
+  for (const m of messages) {
+    const w = m.message;
+    if (m.superseded || typeof w.text !== "string" || !w.text.trim()) continue;
+    if (w.author === "system" || HIDDEN_TYPES.has(w.itemType ?? "")) continue;
+    const mine = m.author.kind === "member" && !!me && m.author.id === me;
+    out.push({
+      id: m.id,
+      role: m.author.kind === "member" ? "user" : "assistant",
+      text: w.text,
+      createdAt: w.createdAt,
+      ...(mine ? {} : { who: m.author.name || (m.author.kind === "member" ? "someone" : "agent") }),
+      ...(w.status === "streaming" ? { streaming: true as const } : {}),
+    });
+  }
+  return out;
+}
+
+// What a working channel is doing: the first active task, with the agent that owns it.
+export function channelActivity(tasks: ChannelTask[], agentName: (id: string) => string) {
+  const t = tasks.find((x) => ACTIVE_CHANNEL_TASK.has(x.state) && !x.parentTaskId) ?? tasks.find((x) => ACTIVE_CHANNEL_TASK.has(x.state));
+  if (!t) return null;
+  const what = firstLine(t.instruction, 48);
+  const who = t.ownerAgentId ? agentName(t.ownerAgentId) : null;
+  return [who, what].filter(Boolean).join(": ") || "Working";
 }

@@ -10,6 +10,7 @@ It's a port of Ryan Hughes's [T3 Code for World of Warcraft](https://github.com/
 ## What it does
 
 - **OpenBot window** (`/ob`): every agent's main chat and its open side threads, grouped into Working and Open. Read a thread, message an agent, steer a working one, stop a run, close or reopen a side thread, answer its questions and approve its requests.
+- **Channels**: each OpenBot channel (a group chat of several agents and people) is a thread too, listed under **Channels** in the agent list. Every message names who said it; yours show as "you". Write to the channel, stop its work, and reading it in the game marks it read in OpenBot. Signed in only.
 - **Server picker**: above the agent list, pick this computer, one of your OpenBot servers, or all of them. The agent list, the thread list and Message Agent then cover only that server. An offline server stays in the picker with its error. With all servers shown, agents on a server read "Name · Server"; the tracker and notices name the server whenever it isn't the one you picked.
 - **Quest tracker**: what's running, what needs you and what just finished, under your quests.
 - **Notices**: a toast, a sound and a chat line when an agent finishes or needs you. They wait until combat ends.

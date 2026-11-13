@@ -19,9 +19,32 @@ const skip = !built && 'dist/team.mjs is not built';
 const CAPS = ['agent-tasks-v1', 'agent-thread-replies-v1', 'agent-thread-files-v1', 'agent-thread-reads-v1', 'message-client-id-v1', 'conversation-pagination'];
 
 // A host with two agents: Ada (working on her main chat, one side thread) and Bo (idle, unread).
-function fakeHost() {
+function fakeHost({ channels = false } = {}) {
   const calls = [];
   const state = {
+    channels: [
+      { id: 'ch-web', name: 'Website', title: '', instructions: '', members: [{ agentId: 'ada' }, { agentId: 'bo' }], leadAgentId: null, archived: false, revision: 4, createdAt: '2026-11-10T00:00:00.000Z', unreadCount: 2, activeTasks: 1, lastMessage: { authorName: 'Ada', text: 'Placeholder is live', at: '2026-11-12T15:34:00.000Z' } },
+      { id: 'ch-old', name: 'Old', title: '', instructions: '', members: [], leadAgentId: null, archived: true, revision: 1, createdAt: '2026-10-01T00:00:00.000Z', unreadCount: 0, activeTasks: 0, lastMessage: null },
+    ],
+    channelPages: {
+      'ch-web': {
+        throughSequence: 7,
+        olderCursor: null,
+        tasks: [
+          { id: 'task-root', parentTaskId: null, ownerAgentId: 'ada', instruction: 'Ship the landing page\nwith copy', state: 'running' },
+          { id: 'task-sub', parentTaskId: 'task-root', ownerAgentId: 'bo', instruction: 'Write copy', state: 'running' },
+          { id: 'task-done', parentTaskId: null, ownerAgentId: 'bo', instruction: 'Old', state: 'completed' },
+        ],
+        messages: [
+          { id: 'cm3', channelId: 'ch-web', sequence: 3, author: { kind: 'agent', id: 'ada', name: 'Ada' }, taskId: null, superseded: false, message: { id: 'x3', author: 'assistant', text: 'On it.', createdAt: '2026-11-12T15:01:00.000Z', status: 'completed' } },
+          { id: 'cm1', channelId: 'ch-web', sequence: 1, author: { kind: 'member', id: 'member-me', name: 'Jake' }, taskId: null, superseded: false, message: { id: 'x1', author: 'user', text: 'Build the site', createdAt: '2026-11-12T15:00:00.000Z', status: 'completed' } },
+          { id: 'cm2', channelId: 'ch-web', sequence: 2, author: { kind: 'member', id: 'member-sam', name: 'Sam' }, taskId: null, superseded: false, message: { id: 'x2', author: 'user', text: 'And a blog', createdAt: '2026-11-12T15:00:30.000Z', status: 'completed' } },
+          { id: 'cm4', channelId: 'ch-web', sequence: 4, author: { kind: 'coordinator', id: 'coord', name: 'Coordinator' }, taskId: null, superseded: true, message: { id: 'x4', author: 'assistant', text: 'Old plan', createdAt: '2026-11-12T15:02:00.000Z', status: 'completed' } },
+          { id: 'cm5', channelId: 'ch-web', sequence: 5, author: { kind: 'agent', id: 'bo', name: 'Bo' }, taskId: 'task-sub', superseded: false, message: { id: 'x5', author: 'assistant', itemType: 'commentary', text: 'thinking', createdAt: '2026-11-12T15:03:00.000Z', status: 'completed' } },
+          { id: 'cm6', channelId: 'ch-web', sequence: 6, author: { kind: 'agent', id: 'bo', name: 'Bo' }, taskId: 'task-sub', superseded: false, message: { id: 'x6', author: 'assistant', text: 'Copy is', createdAt: '2026-11-12T15:04:00.000Z', status: 'streaming' } },
+        ],
+      },
+    },
     agents: [
       { id: 'ada', name: 'Ada', provider: 'claude', model: 'claude-opus-5-5', reasoningEffort: 'high', threadId: 'th-ada' },
       { id: 'bo', name: 'Bo', provider: 'codex', model: 'gpt-x', reasoningEffort: 'medium', threadId: 'th-bo' },
@@ -56,7 +79,15 @@ function fakeHost() {
   const answer = (cmd) => {
     const { method, path: p, body } = cmd;
     const ok = (b, status = 200) => ({ commandId: cmd.id, ok: true, status, body: b });
-    if (p === '/v1/compatibility') return ok({ appVersion: '0.69.0', protocol: { minimum: 1, maximum: 9 }, capabilities: CAPS });
+    if (p === '/v1/compatibility') return ok({ appVersion: '0.69.0', protocol: { minimum: 1, maximum: 9 }, capabilities: channels ? [...CAPS, 'channel-chats-v1'] : CAPS });
+    if (p === '/v1/me') return ok({ id: 'member-me', username: 'jake', email: null, name: 'Jake', avatarUrl: null, role: 'owner', createdAt: '2026-01-01T00:00:00.000Z', disabled: false });
+    if (p === '/v1/channels') return ok(state.channels);
+    if (p === '/v1/channels/read') return ok(state.channelPages[body.channelId]);
+    if (p === '/v1/channels/commands') {
+      const ch = state.channels.find((c) => c.id === body.channelId);
+      if (body.type === 'read') ch.unreadCount = 0;
+      return ok(ch);
+    }
     if (p === '/v1/agents' && method === 'GET') return ok(state.agents);
     if (p === '/v1/agents/models') return ok([{ provider: 'claude', id: 'claude-opus-5-5', name: 'Claude Opus 5.5', description: '', defaultReasoningEffort: 'high', supportedReasoningEfforts: ['low', 'high', 'max'] }]);
     if (p === '/v1/agents/conversation-reads') return ok(state.reads);
@@ -299,18 +330,28 @@ test('a lost connection is tried again until it comes back', { skip }, async () 
   c.stop();
 });
 
-test('a revoked session or a server that is off does not start new attempts', { skip }, async () => {
+test('a server that is off is waited for; an ended session starts a new one; a revoked sign-in stops', { skip }, async () => {
   const fake = fakeHost();
-  const c = await connected(fake, { retryMs: 10 });
+  let signedIn = true;
+  const directory = { listHosts: async () => { if (!signedIn) throw Object.assign(new Error('Unauthorized'), { status: 401 }); return []; } };
+  const c = await connected(fake, { retryMs: 10, directory });
   const connects = () => fake.calls.filter((x) => x.type === 'connect').length;
   await fake.update({ state: 'connecting', hostOffline: true });
   assert.match(c.error, /server is offline/);
   await tick(40);
   assert.equal(connects(), 1, 'the relay holds that attempt itself');
+  // Another client of the same sign-in ended the session on this server.
   await fake.update({ state: 'offline', code: 'session_revoked', message: 'revoked' });
+  assert.match(c.error, /Starting a new one/);
+  await tick(150);
+  assert.equal(connects(), 2, 'a new session');
+  assert.equal(c.state, 'connected');
+  // The sign-in itself was revoked in OpenBot.
+  signedIn = false;
+  await fake.update({ state: 'offline', code: 'session_revoked', message: 'revoked' });
+  await tick(60);
   assert.match(c.error, /openbot-wow login/);
-  await tick(40);
-  assert.equal(connects(), 1);
+  assert.equal(connects(), 2, 'no more attempts');
   c.stop();
 });
 
@@ -341,4 +382,72 @@ test('side threads close and reopen in OpenBot; a main chat can\'t be closed', {
   const file = path.join(c.input.stateDir, 'threads.json');
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8'))), ['visited']);
   c.stop();
+});
+
+test('channels show as threads, read with each speaker named, and take messages, stops and read marks', { skip }, async () => {
+  const fake = fakeHost({ channels: true });
+  const c = await connected(fake);
+  const t = c.threads.get('c:ch-web');
+  assert.ok(t, 'a channel is a thread');
+  assert.equal(c.threads.has('c:ch-old'), false, 'an archived channel is not');
+  assert.deepEqual([t.title, t._channel, t.projectId, threadStatus(t), isUnread(t)], ['Website', 'ch-web', 'c:ch-web', 'working', true]);
+  assert.equal(t.latestVisibleMessage.text, 'Ada: Placeholder is live');
+  assert.deepEqual(c.projects.get('c:ch-web'), { id: 'c:ch-web', title: 'Website', channel: true });
+  assert.equal(c.defaultModelFor('c:ch-web'), null, 'a channel has no model of its own');
+
+  const p = await c.threadProjection('c:ch-web');
+  assert.deepEqual(p.messages.map((m) => [m.role, m.who ?? 'me', m.text, !!m.streaming]), [
+    ['user', 'me', 'Build the site', false],
+    ['user', 'Sam', 'And a blog', false],
+    ['assistant', 'Ada', 'On it.', false],
+    ['assistant', 'Bo', 'Copy is', true],
+  ], 'in order; yours unnamed, others named; superseded and progress notes left out');
+  assert.equal(activityLabel(p), 'Ada: Ship the landing page');
+
+  await c.sendMessage('c:ch-web', 'Use the new logo', 'steer', []);
+  const send = posted(fake, '/v1/channels/commands').find((b) => b.type === 'send');
+  assert.deepEqual({ ...send, operationId: undefined }, { operationId: undefined, channelId: 'ch-web', type: 'send', text: 'Use the new logo', recipientAgentId: null, replyToMessageId: null, attachmentDraftIds: [] });
+  assert.match(send.operationId, /^wow-/);
+
+  await c.interrupt('c:ch-web');
+  const stops = posted(fake, '/v1/channels/commands').filter((b) => b.type === 'stop');
+  assert.deepEqual(stops.map((b) => b.taskId), ['task-root'], 'the running root task; its subtask stops with it');
+
+  c.visit('c:ch-web');
+  await tick(30);
+  assert.equal(posted(fake, '/v1/channels/commands').find((b) => b.type === 'read').throughSequence, 7);
+  assert.equal(isUnread(c.threads.get('c:ch-web')), false);
+
+  await assert.rejects(c.close('c:ch-web'), /channel can't be closed/);
+
+  fake.state.channels[0].name = 'Website v2';
+  fake.event({ type: 'channels-changed', channelId: 'ch-web', revision: 5 });
+  await tick();
+  assert.equal(c.threads.get('c:ch-web').title, 'Website v2', 'a change in OpenBot shows');
+  c.stop();
+});
+
+test('in the game, a channel row is flagged and its messages carry their speaker', { skip }, async () => {
+  const fake = fakeHost({ channels: true });
+  const remote = await connected(fake);
+  const local = Object.assign(new (await import('node:events')).EventEmitter(), {
+    state: 'connected', error: null, threads: new Map(), projects: new Map(), config: { providers: [] },
+    start() {}, stop() {}, apiStatus: () => ({ on: false, agents: [] }), modelGroups: () => [{ code: '', choices: [] }], defaultModelFor: () => null,
+  });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'obwow-addons-'));
+  fs.mkdirSync(path.join(dir, 'OpenBot'));
+  new SlotBank(dir, { slots: 4 }).install();
+  const b = new Bridge({ addonsDir: dir, config: { slots: 4 }, log: () => {}, stateDir: fs.mkdtempSync(path.join(os.tmpdir(), 'obwow-state-')) });
+  b.ob = new Fleet({ local });
+  b.ob.add({ code: 's1', id: 'host-1', label: 'Homelab', client: remote });
+  remote.emit('change', { kind: 'snapshot' });
+  b.client = { session: 's', ui: 'u', seq: 1, ackedSeq: -1, flags: 'o', view: 's1~c:ch-web', slotNext: 1 };
+  await b.refreshView('s1~c:ch-web', true);
+  const snap = b.buildSnapshot();
+  const row = snap.threads.find((t) => t.id === 's1~c:ch-web');
+  assert.deepEqual([row.ch, row.mc, row.p], [true, undefined, 's1~c:ch-web']);
+  assert.equal(snap.projects.find((p) => p.id === 's1~c:ch-web').ch, true);
+  assert.deepEqual(snap.view.msgs.map((m) => [m.r, m.w]), [['u', undefined], ['u', 'Sam'], ['a', 'Ada'], ['a', 'Bo']]);
+  remote.stop();
+  b.stop();
 });

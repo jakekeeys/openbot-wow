@@ -139,6 +139,12 @@ function Store:ProjectLabel(id)
 	return suffix and (name .. " · " .. suffix) or name
 end
 
+-- "Channel", or "Channel · Server" where the server is named (see ServerSuffix).
+function Store:ChannelLabel(t)
+	local suffix = self:ServerSuffix(Store.ServerOf(t))
+	return "Channel" .. (suffix and (" · " .. suffix) or "")
+end
+
 -- Threads grouped for the sidebar, filtered by server (nil: all), agent ("all" or an id) and
 -- search text.
 function Store:Groups(projectFilter, query, server)

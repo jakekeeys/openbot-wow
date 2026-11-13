@@ -65,7 +65,7 @@ export class TeamHostClient extends EventEmitter {
   error: string | null = null;
   origin: string;
   threads = new Map<string, S.Thread>();
-  projects = new Map<string, { id: string; title: string }>();
+  projects = new Map<string, { id: string; title: string; channel?: true }>();
   agents = new Map<string, S.Agent>();
   models: S.ModelChoice[] = [];
   capabilities = new Set<string>();
@@ -89,6 +89,12 @@ export class TeamHostClient extends EventEmitter {
   private dirtyChats = new Set<string>();
   private dirtyTasks = new Set<string>();
   private dirtyAgents = false;
+  private dirtyChannels = false;
+  // Channels (channel-chats-v1): group chats of several agents and people.
+  private channels = new Map<string, S.Channel>();
+  private channelPages = new Map<string, { tasks: S.ChannelTask[]; throughSequence: number }>();
+  // Your member id on this server, so your own channel messages show as yours.
+  private me: string | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
@@ -174,7 +180,13 @@ export class TeamHostClient extends EventEmitter {
     }
   }
 
+  private signInRevoked() {
+    this.stopped = true;
+    this.setState("offline", "The bridge's OpenBot sign-in was revoked. Run openbot-wow login.");
+  }
+
   private failed(err: unknown) {
+    if (isSignInRevoked(err)) return this.signInRevoked();
     const message = err instanceof Error ? err.message : String(err);
     this.log(message);
     this.setState("offline", message);
@@ -210,9 +222,21 @@ export class TeamHostClient extends EventEmitter {
       return;
     }
     if (update.state !== "offline") return;
+    // The server ended this connection's session. That also happens when another client of the
+    // same sign-in ends its session on this server, so check the sign-in itself: still good, start
+    // a new session; revoked (the account service answers 401), stop and say so.
     if (update.code === "session_revoked") {
-      this.stopped = true;
-      this.setState("offline", "The bridge's OpenBot session was revoked. Run openbot-wow login.");
+      this.setState("offline", "The server ended the bridge's session. Starting a new one.");
+      Promise.resolve().then(() => this.input.directory.listHosts()).then(
+        () => {
+          this.attempt = Math.max(this.attempt, 2);
+          this.scheduleRetry();
+        },
+        (err) => {
+          if (isSignInRevoked(err)) this.signInRevoked();
+          else this.scheduleRetry();
+        },
+      );
       return;
     }
     if (update.code === "protocol_error") {
@@ -255,6 +279,11 @@ export class TeamHostClient extends EventEmitter {
       await this.loadChat(id);
       await this.loadTasks(id);
     });
+    await this.loadChannels();
+    if (this.channels.size && !this.me) {
+      const me = await this.request("GET", TEAM_API_ROUTES.me).catch(() => null);
+      this.me = isRec(me) && typeof me.id === "string" ? me.id : null;
+    }
     this.ready = true;
     this.rebuild();
   }
@@ -293,6 +322,25 @@ export class TeamHostClient extends EventEmitter {
     if (agent && isRec(page) && typeof page.threadId === "string") agent.threadId = page.threadId;
   }
 
+  private async loadChannels() {
+    if (!this.has("channel-chats-v1")) return;
+    const body = await this.request("GET", "/v1/channels").catch((err) => {
+      this.log(`channels: ${(err as Error).message}`);
+      return null;
+    });
+    if (body) this.channels = new Map(S.toChannels(body).map((c) => [c.id, c]));
+  }
+
+  private async loadChannelPage(channelId: string) {
+    const page = S.toChannelPage(await this.request("POST", "/v1/channels/read", { channelId }));
+    this.channelPages.set(channelId, { tasks: page.tasks, throughSequence: page.throughSequence });
+    return page;
+  }
+
+  private channelCommand(channelId: string, command: Rec) {
+    return this.request("POST", "/v1/channels/commands", { operationId: `wow-${randomUUID()}`, channelId, ...command });
+  }
+
   private async loadTasks(agentId: string) {
     if (!this.has("agent-tasks-v1")) return;
     const body = await this.request("POST", "/v1/agent-tasks/list", { agentId }).catch(() => null);
@@ -316,6 +364,8 @@ export class TeamHostClient extends EventEmitter {
     const agents = this.dirtyAgents;
     const chats = [...this.dirtyChats];
     const tasks = [...this.dirtyTasks];
+    const channels = this.dirtyChannels;
+    this.dirtyChannels = false;
     this.dirtyAgents = false;
     this.dirtyChats.clear();
     this.dirtyTasks.clear();
@@ -327,6 +377,7 @@ export class TeamHostClient extends EventEmitter {
       await mapLimit([...new Set(chats)].filter((id) => this.agents.has(id)), 4, (id) => this.loadChat(id));
       await mapLimit([...new Set(tasks)].filter((id) => this.agents.has(id)), 4, (id) => this.loadTasks(id));
       if (chats.length) await this.loadReads();
+      if (channels) await this.loadChannels();
     } catch (err) {
       this.log(`refresh: ${(err as Error).message}`);
     }
@@ -399,7 +450,11 @@ export class TeamHostClient extends EventEmitter {
           }
           this.dirtyChats.add(main);
           this.rebuild();
-        } else if (agentId) this.dirtyTasks.add(agentId);
+        } else if (agentId) {
+          // Not the agent's main chat: one of its side threads, or work in a channel.
+          this.dirtyTasks.add(agentId);
+          if (this.channels.size) this.dirtyChannels = true;
+        }
         break;
       }
       case "turn-progress": {
@@ -412,6 +467,9 @@ export class TeamHostClient extends EventEmitter {
         this.rebuild();
         break;
       }
+      case "channels-changed":
+        this.dirtyChannels = true;
+        break;
       case "agent-tasks-changed":
       case "agent-task-conversation":
       case "agent-task-conversation-delta": {
@@ -505,6 +563,7 @@ export class TeamHostClient extends EventEmitter {
           _main: true,
           _agent: agent.id,
           _task: null,
+          _channel: null,
           _wireThread: agent.threadId,
           _canReply: true,
           _canStop: !!chat.activeTurnId,
@@ -545,6 +604,7 @@ export class TeamHostClient extends EventEmitter {
             _main: false,
             _agent: agent.id,
             _task: t.id,
+            _channel: null,
             _wireThread: t.threadId,
             _canReply: true,
             _canStop: working,
@@ -553,6 +613,47 @@ export class TeamHostClient extends EventEmitter {
           }),
         );
       }
+    }
+    for (const ch of this.channels.values()) {
+      const working = ch.activeTasks > 0;
+      const key = `c:${ch.id}`;
+      if (working && !this.taskRunning.has(key)) {
+        this.taskRunning.add(key);
+        this.taskRunStart.set(key, new Date().toISOString());
+      } else if (!working) this.taskRunning.delete(key);
+      const at = ch.lastMessage?.at || ch.createdAt;
+      out.push(
+        this.withMarks({
+          id: key,
+          projectId: key,
+          title: ch.name,
+          createdAt: ch.createdAt,
+          updatedAt: at,
+          status: working ? "running" : "idle",
+          activityRunStatus: working ? "running" : null,
+          activeRunId: null,
+          activityRunStartedAt: working ? (this.taskRunStart.get(key) ?? null) : null,
+          latestRunStartedAt: this.taskRunStart.get(key) ?? null,
+          // A channel gets messages while it works, so unread follows OpenBot's own count:
+          // the latest message counts as seen only when nothing is unread.
+          latestRunCompletedAt: at,
+          lastVisitedAt: ch.unreadCount === 0 ? at : null,
+          lastError: null,
+          closedAt: null,
+          modelSelection: null,
+          latestVisibleMessage: ch.lastMessage?.text ? { role: "assistant", text: ch.lastMessage.authorName ? `${ch.lastMessage.authorName}: ${ch.lastMessage.text}` : ch.lastMessage.text } : null,
+          pendingRuntimeRequest: null,
+          _main: false,
+          _agent: "",
+          _task: null,
+          _channel: ch.id,
+          _wireThread: null,
+          _canReply: true,
+          _canStop: working,
+          _rev: `${ch.revision}:${ch.unreadCount}:${ch.activeTasks}:${at}`,
+          _pending: null,
+        }),
+      );
     }
     // Each prompt or approval goes on its chat, else on its agent's main chat.
     for (const p of this.pending.values()) {
@@ -568,7 +669,8 @@ export class TeamHostClient extends EventEmitter {
     if (!this.ready) return;
     const modelsBefore = JSON.stringify(this.models);
     const threads = new Map(this.buildThreads().map((t) => [t.id, t]));
-    const projects = new Map([...this.agents.values()].filter((a) => !this.hidden.has(a.id)).map((a) => [a.id, { id: a.id, title: a.name }]));
+    const projects = new Map<string, { id: string; title: string; channel?: true }>([...this.agents.values()].filter((a) => !this.hidden.has(a.id)).map((a) => [a.id, { id: a.id, title: a.name }]));
+    for (const ch of this.channels.values()) projects.set(`c:${ch.id}`, { id: `c:${ch.id}`, title: ch.name, channel: true });
     const projectsChanged = JSON.stringify([...projects.values()]) !== JSON.stringify([...this.projects.values()]);
     const prev = this.threads;
     this.threads = threads;
@@ -597,6 +699,16 @@ export class TeamHostClient extends EventEmitter {
 
   async threadProjection(threadId: string) {
     const t = this.thread(threadId);
+    const name = (id: string) => this.agents.get(id)?.name ?? "another agent";
+    if (t._channel) {
+      const page = await this.loadChannelPage(t._channel);
+      return {
+        messages: S.channelTranscript(page.messages, this.me),
+        runs: [],
+        activity: t.activeRunId || t.activityRunStatus ? S.channelActivity(page.tasks, name) ?? "Working" : null,
+        ...S.pendingParts(null),
+      };
+    }
     let messages: S.WireMessage[];
     let progress: string | null = null;
     if (t._main) {
@@ -608,7 +720,6 @@ export class TeamHostClient extends EventEmitter {
       messages = S.toMessages(await this.request("POST", "/v1/agent-tasks/read", { agentId: t._agent, taskId: t._task }));
       progress = (t._wireThread && this.taskProgress.get(t._wireThread)) || null;
     }
-    const name = (id: string) => this.agents.get(id)?.name ?? "another agent";
     return {
       messages: S.toTranscript(messages, name),
       runs: [],
@@ -660,6 +771,13 @@ export class TeamHostClient extends EventEmitter {
   async sendMessage(threadId: string, text: string, mode = "steer", attachments: S.Attachment[] = []) {
     const t = this.thread(threadId);
     const files = await this.upload(attachments);
+    if (t._channel) {
+      // To the channel: its coordinator decides which agent takes it, as in OpenBot.
+      await this.channelCommand(t._channel, { type: "send", text, recipientAgentId: null, replyToMessageId: null, attachmentDraftIds: files });
+      this.dirtyChannels = true;
+      this.schedule();
+      return;
+    }
     if (!t._main) {
       // A side thread: plain text through agent-tasks-v1, screenshots through agent-thread-files-v1.
       // (agent-thread-replies-v1 quotes a message and needs its id, so it's not for this.)
@@ -698,6 +816,17 @@ export class TeamHostClient extends EventEmitter {
 
   async interrupt(threadId: string) {
     const t = this.thread(threadId);
+    if (t._channel) {
+      // Stop the channel's work: each task it's running (a stopped task stops its subtasks).
+      const page = await this.loadChannelPage(t._channel);
+      const roots = page.tasks.filter((x) => S.ACTIVE_CHANNEL_TASK.has(x.state) && !x.parentTaskId);
+      const active = roots.length ? roots : page.tasks.filter((x) => S.ACTIVE_CHANNEL_TASK.has(x.state));
+      if (!active.length) throw new Error("Nothing is running in that channel.");
+      for (const task of active) await this.channelCommand(t._channel, { type: "stop", taskId: task.id, recipientAgentId: null });
+      this.dirtyChannels = true;
+      this.schedule();
+      return;
+    }
     if (!t._main) await this.request("POST", "/v1/agent-tasks/stop", { agentId: t._agent, taskId: t._task });
     else {
       const turnId = this.chats.get(t._agent)?.activeTurnId;
@@ -765,6 +894,7 @@ export class TeamHostClient extends EventEmitter {
 
   private async taskAction(threadId: string, action: "close" | "reopen") {
     const t = this.thread(threadId);
+    if (t._channel) throw new Error("A channel can't be closed from the game.");
     if (t._main || !t._task) throw new Error("An agent's main chat can't be closed.");
     await this.request("POST", `/v1/agent-tasks/${action}`, { agentId: t._agent, taskId: t._task });
     await this.loadTasks(t._agent);
@@ -776,6 +906,19 @@ export class TeamHostClient extends EventEmitter {
   visit(threadId: string) {
     const t = this.thread(threadId);
     this.mark("visited", threadId, true);
+    if (t._channel) {
+      const channelId = t._channel;
+      const known = this.channelPages.get(channelId);
+      void (known ? Promise.resolve(known) : this.loadChannelPage(channelId))
+        .then((page) => this.channelCommand(channelId, { type: "read", throughSequence: page.throughSequence }))
+        .then(() => {
+          const ch = this.channels.get(channelId);
+          if (ch) ch.unreadCount = 0;
+          this.rebuild();
+        })
+        .catch(() => undefined);
+      return;
+    }
     if (!t._main && this.has("agent-thread-reads-v1")) {
       void this.request("POST", "/v1/agent-tasks/read", { agentId: t._agent, taskId: t._task })
         .then((snap) => {
@@ -831,6 +974,12 @@ export class TeamHostClient extends EventEmitter {
     fs.mkdirSync(this.input.stateDir, { recursive: true });
     fs.writeFileSync(this.marksFile(), JSON.stringify(this.marks));
   }
+}
+
+// The account service refused the bridge's sign-in (HTTP 401).
+function isSignInRevoked(err: unknown) {
+  const e = err as { status?: unknown; reference?: unknown } | null;
+  return !!e && (e.status === 401 || e.reference === "http/401");
 }
 
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<unknown>) {

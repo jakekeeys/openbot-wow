@@ -379,6 +379,61 @@ do
 	ns.ThreadList:Refresh(true)
 end
 
+-- Channels: a thread per channel, under its own heading; speakers named; no Close.
+do
+	local M, L = ns.Main, ns.ThreadList
+	local header = M.frame.Pages.threads.Right.Header
+	local snap = {}
+	for k, v in pairs(data) do snap[k] = v end
+	snap.threads, snap.projects = {}, {}
+	for _, t in ipairs(data.threads) do table.insert(snap.threads, t) end
+	for _, p in ipairs(data.projects) do table.insert(snap.projects, p) end
+	table.insert(snap.projects, { id = "c:web", name = "Website", ch = true, act = true })
+	table.insert(snap.threads, { id = "c:web", title = "Website", p = "c:web", s = "working", l = "Ada: Ship the landing page", st = time() - 40, ch = true })
+	snap.view = { id = "c:web", msgs = {
+		{ r = "u", t = "Build the site", at = time() - 300, n = 1 },
+		{ r = "u", t = "And a blog", at = time() - 290, n = 2, w = "Sam" },
+		{ r = "a", t = "On it.", at = time() - 280, n = 3, w = "Ada" },
+	} }
+	ns.db.settings.server, ns.db.settings.project = "all", "all"
+	snap.gen = (ns.db.gen or 0) + 1
+	snap.now = time()
+	ns.Transport:Apply(snap)
+	L:Refresh(true)
+	local row
+	for _, r in ipairs(L.scrollBox._rows) do if r.ed.thread and r.ed.thread.id == "c:web" then row = r end end
+	check(row ~= nil, "channels: a channel is a thread in the list")
+	local labels, headerAt, channelAt = {}, nil, nil
+	for i, o in ipairs(L.dropdown.options) do
+		table.insert(labels, o.label)
+		if o.header and o.label == "Channels" then headerAt = i end
+		if o.value == "c:web" then channelAt = i end
+	end
+	check(headerAt ~= nil and channelAt == headerAt + 1 and channelAt == #L.dropdown.options, "channels: listed after the agents, under Channels")
+	ns.ViewId = nil
+	M:SelectThread("c:web")
+	M:Refresh()
+	check(not header.Action:IsShown(), "channels: no Close on a channel")
+	check(header.Text:GetText():find("Channel", 1, true) ~= nil, "channels: the header says it's a channel")
+	ns.Transcript:Refresh(true)
+	local said = {}
+	for _, r in ipairs(ns.Transcript.scrollBox._rows) do
+		if r.ed.msg and r.frame.Label then table.insert(said, (r.frame.Label:GetText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))) end
+	end
+	check(table.concat(said, ",") == "you,Sam,Ada", "channels: each message names who said it: " .. table.concat(said, ","))
+	M:StartNewThread()
+	local msgOpts = {}
+	for _, o in ipairs(header.Project.options) do table.insert(msgOpts, o.value) end
+	check(not table.concat(msgOpts, ","):find("c:web", 1, true), "channels: Message Agent lists agents only")
+	check(M.newProject ~= "c:web", "channels: Message Agent never picks a channel")
+	M:Back()
+	data.gen = (ns.db.gen or 0) + 1
+	data.now = time()
+	ns.Transport:Apply(data)
+	M:SelectThread(viewId ~= "" and viewId or firstThread.id)
+	L:Refresh(true)
+end
+
 -- Servers: a picker of its own, and the agent list, the thread list and Message Agent scoped to it.
 do
 	local S = ns.Store
