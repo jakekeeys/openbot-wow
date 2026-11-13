@@ -67,6 +67,13 @@ function fakeHost() {
     if (p.startsWith('/v1/attachments?')) return ok({ id: 'draft-1' });
     m = /^\/v1\/agents\/([^/]+)\/messages$/.exec(p);
     if (m) return ok({ messageId: 'new-msg', deliveries: [{ id: 'del-1', recipientAgentId: m[1], status: 'queued', position: 1 }] }, 202);
+    if (p === '/v1/agent-tasks/close' || p === '/v1/agent-tasks/reopen') {
+      const task = (state.tasks[body.agentId] || []).find((t) => t.id === body.taskId);
+      if (!task) return ok({ error: 'not found' }, 404);
+      if (p.endsWith('/close')) Object.assign(task, { state: 'closed', closedAt: new Date().toISOString() });
+      else Object.assign(task, { state: 'idle', closedAt: null });
+      return ok({}, 204);
+    }
     if (/\/queue\/steer$/.test(p) || /\/interrupt$/.test(p) || p.startsWith('/v1/prompts/') || p.startsWith('/v1/approvals/') || p.startsWith('/v1/agent-tasks/stop') || p.endsWith('/conversation/read')) return ok({}, 204);
     // As the real host: a reply must quote a message, so a null replyToMessageId is refused.
     if (p === '/v1/agent-threads/send-reply') return typeof body.replyToMessageId === 'string' ? ok({ messageId: 'r', deliveries: [] }) : ok({ error: 'Invalid admin identifier.' }, 400);
@@ -304,5 +311,34 @@ test('a revoked session or a server that is off does not start new attempts', { 
   assert.match(c.error, /openbot-wow login/);
   await tick(40);
   assert.equal(connects(), 1);
+  c.stop();
+});
+
+test('side threads close and reopen in OpenBot; a main chat can\'t be closed', { skip }, async () => {
+  const fake = fakeHost();
+  const c = await connected(fake);
+  await assert.rejects(c.close('a:ada'), /main chat can't be closed/);
+  assert.equal(posted(fake, '/v1/agent-tasks/close').length, 0);
+  assert.equal(c.threads.has('t:task-2'), false, 'a task closed days ago is gone');
+  await c.close('t:task-1');
+  assert.deepEqual(posted(fake, '/v1/agent-tasks/close'), [{ agentId: 'ada', taskId: 'task-1' }]);
+  assert.equal(threadStatus(c.threads.get('t:task-1')), 'closed', 'kept for a while, closed, so it can be reopened');
+  await c.reopen('t:task-1');
+  assert.deepEqual(posted(fake, '/v1/agent-tasks/reopen'), [{ agentId: 'ada', taskId: 'task-1' }]);
+  assert.equal(threadStatus(c.threads.get('t:task-1')), 'open');
+  // Closed, then it runs again (someone wrote to it on the desktop): it's back, and its run starts now.
+  await c.close('t:task-1');
+  const task = fake.state.tasks.ada.find((t) => t.id === 'task-1');
+  const now = new Date().toISOString();
+  Object.assign(task, { state: 'running', closedAt: null, updatedAt: now, activeTurnId: 'turn-t' });
+  fake.event({ type: 'agent-tasks-changed', agentId: 'ada' });
+  await tick();
+  const t1 = c.threads.get('t:task-1');
+  assert.equal(threadStatus(t1), 'working');
+  assert.equal(t1.activityRunStartedAt, now, 'the run start is when it started running, not when the task was made');
+  // The bridge keeps no settle or archive marks for the relay.
+  c.visit('a:bo');
+  const file = path.join(c.input.stateDir, 'threads.json');
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8'))), ['visited']);
   c.stop();
 });

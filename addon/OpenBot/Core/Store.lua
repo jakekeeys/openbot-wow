@@ -14,10 +14,11 @@ local Store = {
 }
 ns.Store = Store
 
+-- Closed side threads aren't in any group: they leave the list. (There's no Settled pile:
+-- OpenBot has no such state, and the game would disagree with the desktop and the phone.)
 local GROUP_OF = {
 	working = "working", input = "working", plan = "working",
 	open = "open", failed = "open",
-	settled = "settled",
 }
 Store.GROUP_OF = GROUP_OF
 
@@ -141,14 +142,14 @@ end
 -- Threads grouped for the sidebar, filtered by server (nil: all), agent ("all" or an id) and
 -- search text.
 function Store:Groups(projectFilter, query, server)
-	local groups = { working = {}, open = {}, settled = {} }
+	local groups = { working = {}, open = {} }
 	for _, t in ipairs(self.data.threads) do
 		local match = (server == nil or Store.ServerOf(t) == server)
 			and (projectFilter == nil or projectFilter == "all" or t.p == projectFilter)
 		if match and query and query ~= "" then
 			match = t.title:lower():find(query, 1, true) or self:ProjectLabel(t.p):lower():find(query, 1, true)
 		end
-		if match then
+		if match and t.s ~= "closed" and t.s ~= "settled" then
 			local g = GROUP_OF[t.s] or "open"
 			table.insert(groups[g], t)
 		end
@@ -296,11 +297,11 @@ end
 
 local STATUS_TEXT = {
 	working = "Working", input = "Waiting", plan = "Plan ready",
-	open = "Finished", failed = "Failed", settled = "Settled",
+	open = "Finished", failed = "Failed", closed = "Closed",
 }
 local STATUS_COLOR = {
 	working = "blue", input = "orange", plan = "orange",
-	open = "white", failed = "red", settled = "grey",
+	open = "white", failed = "red", closed = "grey",
 }
 
 function Store.StatusText(s)

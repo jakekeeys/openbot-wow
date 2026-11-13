@@ -305,10 +305,79 @@ for _, r in ipairs(ns.ThreadList.scrollBox._rows) do if r.ed.thread then threadR
 check(threadRows == 0, "search hides non-matching threads")
 ns.ThreadList.query = nil
 local groups = ns.Store:Groups("all", nil, "")
-check(#groups.working + #groups.open + #groups.settled > 0, "server filter (this computer) keeps local threads")
+check(#groups.working + #groups.open > 0, "server filter (this computer) keeps local threads")
 groups = ns.Store:Groups("all", nil, "s9")
-check(#groups.working + #groups.open + #groups.settled == 0, "server filter (another server) excludes local threads")
+check(#groups.working + #groups.open == 0, "server filter (another server) excludes local threads")
 ns.ThreadList:Refresh(true)
+
+-- Closing: only side threads, through OpenBot; no Settled pile.
+do
+	local S, M = ns.Store, ns.Main
+	local header = M.frame.Pages.threads.Right.Header
+	local snap = {}
+	for k, v in pairs(data) do snap[k] = v end
+	snap.threads = {}
+	for _, t in ipairs(data.threads) do table.insert(snap.threads, t) end
+	table.insert(snap.threads, { id = "x:main", title = "Ada", p = data.projects[1] and data.projects[1].id or "p", s = "open", u = time() - 60, mc = true })
+	table.insert(snap.threads, { id = "x:side", title = "Fix the build", p = data.projects[1] and data.projects[1].id or "p", s = "open", u = time() - 30 })
+	table.insert(snap.threads, { id = "x:local", title = "Local side", p = data.projects[1] and data.projects[1].id or "p", s = "open", u = time() - 20, lc = true })
+	table.insert(snap.threads, { id = "x:gone", title = "Closed one", p = data.projects[1] and data.projects[1].id or "p", s = "closed", u = time() - 10 })
+	local function apply()
+		snap.gen = (ns.db.gen or 0) + 1
+		snap.now = time()
+		ns.Transport:Apply(snap)
+	end
+	local function tip(w)
+		local lines = {}
+		local tt = GameTooltip
+		local setText, addLine = rawget(tt, "SetText"), rawget(tt, "AddLine")
+		tt.SetText = function(_, text) table.insert(lines, tostring(text)) end
+		tt.AddLine = function(_, text) table.insert(lines, tostring(text)) end
+		w._scripts.OnEnter(w)
+		tt.SetText, tt.AddLine = setText, addLine
+		return table.concat(lines, "\n")
+	end
+	local function lastCmd() return ns.Transport.queue[#ns.Transport.queue] end
+	apply()
+	ns.ThreadList:Refresh(true)
+	local headers, closedRow = {}, false
+	for _, r in ipairs(ns.ThreadList.scrollBox._rows) do
+		if r.ed.header then table.insert(headers, r.ed.key) end
+		if r.ed.thread and r.ed.thread.id == "x:gone" then closedRow = true end
+	end
+	check(table.concat(headers, ",") == "working,open", "close: no Settled group: " .. table.concat(headers, ","))
+	check(not closedRow, "close: a closed side thread is not in the list")
+
+	M:SelectThread("x:main")
+	M:Refresh()
+	check(not header.Action:IsShown(), "close: no Close on a main chat")
+	local before = #ns.Transport.queue
+	M:HeaderAction()
+	check(#ns.Transport.queue == before, "close: nothing to send for a main chat")
+
+	M:SelectThread("x:side")
+	M:Refresh()
+	check(header.Action:IsShown() and header.Action:GetText() == "Close", "close: Close on a side thread")
+	check(tip(header.Action):find("Close this side thread in OpenBot", 1, true) ~= nil, "close: its tooltip says it closes in OpenBot")
+	M:HeaderAction()
+	check(lastCmd().verb == "close" and lastCmd().args[1] == "x:side", "close: Close sends close")
+
+	M:SelectThread("x:local")
+	M:Refresh()
+	check(tip(header.Action):find("in the game only", 1, true) ~= nil, "close: without a sign-in, the tooltip says it only hides it here")
+
+	M:SelectThread("x:gone")
+	M:Refresh()
+	check(header.Action:GetText() == "Reopen", "close: Reopen on the closed side thread you're reading")
+	M:HeaderAction()
+	check(lastCmd().verb == "reopen", "close: Reopen sends reopen")
+	check(S.StatusText("closed") == "Closed", "close: closed reads as Closed")
+	M:SelectThread(viewId ~= "" and viewId or firstThread.id)
+	data.gen = (ns.db.gen or 0) + 1
+	data.now = time()
+	ns.Transport:Apply(data)
+	ns.ThreadList:Refresh(true)
+end
 
 -- Servers: a picker of its own, and the agent list, the thread list and Message Agent scoped to it.
 do

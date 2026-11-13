@@ -92,7 +92,7 @@ local DEFAULTS = {
 		project = "all",
 		server = "all", -- the picked server: "all", "" (this computer), or a server code
 		quickReplies = true,
-		collapsed = { settled = true },
+		collapsed = {},
 		strip = true,
 		trackerLocked = true,
 		trackerAlways = true,

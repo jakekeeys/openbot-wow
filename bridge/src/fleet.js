@@ -169,10 +169,6 @@ export class Fleet extends EventEmitter {
     return { ...this.local.client.config, providers: [...providers.values()] };
   }
 
-  get olderSettled() {
-    return 0;
-  }
-
   environments() {
     return this.envs.map((e) => ({
       code: e.code,
@@ -229,19 +225,14 @@ export class Fleet extends EventEmitter {
     return env.client.respondAnswers(id, requestId, answers);
   }
 
-  settle(key) {
+  close(key) {
     const { env, id } = this.split(key);
-    return env.client.settle(id);
+    return env.client.close(id);
   }
 
-  unsettle(key) {
+  reopen(key) {
     const { env, id } = this.split(key);
-    return env.client.unsettle(id);
-  }
-
-  archive(key) {
-    const { env, id } = this.split(key);
-    return env.client.archive(id);
+    return env.client.reopen(id);
   }
 
   visit(key) {

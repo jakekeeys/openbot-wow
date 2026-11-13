@@ -11,7 +11,6 @@ local LIST_W_DEFAULT = 280
 local GROUPS = {
 	{ key = "working", label = "Working" },
 	{ key = "open", label = "Open" },
-	{ key = "settled", label = "Settled" },
 }
 
 local DOT_COLORS = {
@@ -107,7 +106,7 @@ local function InitRow(button, ed)
 	button.thread = t
 	button.Selected:SetShown(t.id == ns.viewId and ns.Main.mode ~= "new")
 	button.Title:SetText(t.title)
-	if t.s == "settled" then
+	if t.s == "closed" then
 		button.Title:SetTextColor(0.75, 0.75, 0.75)
 	else
 		button.Title:SetTextColor(NORMAL_FONT_COLOR:GetRGB())
@@ -302,7 +301,7 @@ function L:Refresh(force)
 	end
 	local key = table.concat({
 		ns.Store.applied, s.project, tostring(s.server), tostring(s.collapsed.working), tostring(s.collapsed.open),
-		tostring(s.collapsed.settled), tostring(ns.viewId), ns.Main.mode, self.query or "",
+		tostring(ns.viewId), ns.Main.mode, self.query or "",
 	}, ":")
 	if key == self.key and not force then
 		-- Only timers changed: refresh the visible rows in place.
@@ -319,12 +318,12 @@ function L:Refresh(force)
 	local groups = ns.Store:Groups(ns.Store:SelectedAgent() or "all", self.query, server)
 	local dp = CreateDataProvider()
 	local note = server and ns.Store.applied > 0 and ServerNote(server)
-	local any = #groups.working + #groups.open + #groups.settled > 0
+	local any = #groups.working + #groups.open > 0
 	if note then dp:Insert({ empty = note, tall = true }) end
 	for _, g in ipairs(note and not any and {} or GROUPS) do
 		local list = groups[g.key]
 		local collapsed = s.collapsed[g.key]
-		if #list > 0 or g.key ~= "settled" then
+		do
 			dp:Insert({ header = true, key = g.key, label = g.label, count = #list, collapsed = collapsed })
 			if not collapsed then
 				for _, t in ipairs(list) do dp:Insert({ thread = t }) end
@@ -336,8 +335,6 @@ function L:Refresh(force)
 	end
 	if ns.Store.applied == 0 then
 		dp:Insert({ empty = "Waiting for the bridge…" })
-	elseif (ns.Store.data.older or 0) > 0 and not s.collapsed.settled then
-		dp:Insert({ empty = string.format("+%d older settled threads in OpenBot", ns.Store.data.older) })
 	end
 	self.scrollBox:SetDataProvider(dp, ScrollBoxConstants.RetainScrollPosition)
 	ns:Fire("ListRebuilt")

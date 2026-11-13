@@ -38,6 +38,7 @@ export interface Task {
   progress: string | null;
   createdAt: string;
   updatedAt: string;
+  closedAt: string | null;
 }
 
 export interface Prompt {
@@ -83,8 +84,9 @@ export interface Thread {
   latestRunCompletedAt: string | null;
   lastVisitedAt: string | null;
   lastError: string | null;
-  settledOverride: "settled" | null;
-  archivedAt: string | null;
+  // A side thread that OpenBot closed: it leaves the list, and comes back when it's reopened or
+  // runs again. Never set on a main chat.
+  closedAt: string | null;
   modelSelection: { instanceId: string; model: string; options: { id: string; value: string }[] } | null;
   latestVisibleMessage: { role: "assistant"; text: string } | null;
   pendingRuntimeRequest: { kind: string } | null;
@@ -118,7 +120,7 @@ export function toTasks(body: Json): Task[] {
     if (!id || !agentId) return [];
     const state = (["running", "queued", "idle", "closed"] as const).find((s) => s === t.state) ?? "idle";
     const outcome = (["completed", "failed", "interrupted"] as const).find((s) => s === t.outcome) ?? null;
-    return [{ id, agentId, threadId: str(t.threadId), title: str(t.title) || "Side thread", state, outcome, activeTurnId: str(t.activeTurnId), error: str(t.error), progress: str(t.progress), createdAt: str(t.createdAt) || "", updatedAt: str(t.updatedAt) || str(t.createdAt) || "" }];
+    return [{ id, agentId, threadId: str(t.threadId), title: str(t.title) || "Side thread", state, outcome, activeTurnId: str(t.activeTurnId), error: str(t.error), progress: str(t.progress), createdAt: str(t.createdAt) || "", updatedAt: str(t.updatedAt) || str(t.createdAt) || "", closedAt: str(t.closedAt) }];
   });
 }
 

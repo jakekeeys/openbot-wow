@@ -9,7 +9,7 @@ It's a port of Ryan Hughes's [T3 Code for World of Warcraft](https://github.com/
 
 ## What it does
 
-- **OpenBot window** (`/ob`): every agent's main chat and its open side threads, grouped into Working, Open and Settled. Read a thread, message an agent, steer a working one, stop a run, answer its questions and approve its requests.
+- **OpenBot window** (`/ob`): every agent's main chat and its open side threads, grouped into Working and Open. Read a thread, message an agent, steer a working one, stop a run, close or reopen a side thread, answer its questions and approve its requests.
 - **Server picker**: above the agent list, pick this computer, one of your OpenBot servers, or all of them. The agent list, the thread list and Message Agent then cover only that server. An offline server stays in the picker with its error. With all servers shown, agents on a server read "Name · Server"; the tracker and notices name the server whenever it isn't the one you picked.
 - **Quest tracker**: what's running, what needs you and what just finished, under your quests.
 - **Notices**: a toast, a sound and a chat line when an agent finishes or needs you. They wait until combat ends.
@@ -34,7 +34,7 @@ Without a sign-in, or while the relay to this computer has been down for a minut
 | Model list | ✓ server's list | — only models agents use, plus your config |
 | Other OpenBot servers | ✓ | — |
 
-Settled, archived and read-in-game marks are kept by the bridge. A new run brings a thread back.
+Closing works as in OpenBot: an agent's main chat is its permanent conversation and can't be closed. A side thread can be closed and reopened (**Close** in its header): it leaves the list, and comes back if it's reopened or runs again. There's no Settled pile in the game, since OpenBot has none. Without a sign-in, Local scripts can't close a side thread in OpenBot, so Close only hides it in the game until it runs again; its tooltip says so.
 
 ## Requirements
 

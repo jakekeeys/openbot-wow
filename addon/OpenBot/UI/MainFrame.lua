@@ -166,17 +166,20 @@ function M:CreateThreadsPage(page)
 	header.Text:SetPoint("LEFT", 12, 0)
 	header.Text:SetPoint("RIGHT", -110, 0)
 	header.Text:SetWordWrap(false)
-	header.Action = UI.Button(header, "Settle", 96, function() M:HeaderAction() end)
+	-- Close or Reopen, on a side thread only: an agent's main chat is its permanent conversation.
+	header.Action = UI.Button(header, "Close", 96, function() M:HeaderAction() end)
 	header.Action:SetPoint("RIGHT", -4, 0)
-	header.Archive = UI.Button(header, "Archive", 86, function()
-		if ns.viewId then
-			ns.Transport:Send("archive", ns.viewId)
-			PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF)
+	header.Action:Hide()
+	UI.Tooltip(header.Action, function(self) return self:GetText() end, function()
+		local t = ns.Store:Thread(ns.viewId)
+		if not t then return nil end
+		if t.lc then
+			return t.s == "closed" and "Show this side thread in the list again."
+				or "Hides this side thread in the game only: without a sign-in, the bridge reaches this computer through Local scripts, which can't close a side thread in OpenBot. It comes back when it runs again. Run openbot-wow login to close it for real."
 		end
+		return t.s == "closed" and "Reopen this side thread in OpenBot."
+			or "Close this side thread in OpenBot, as on the desktop and the phone. It leaves the list, and comes back if it's reopened or runs again."
 	end)
-	header.Archive:SetPoint("RIGHT", header.Action, "LEFT", -4, 0)
-	header.Archive:Hide()
-	UI.Tooltip(header.Archive, "Archive", "Hide this thread from the list here. It stays in OpenBot, and comes back when the agent works in it again.")
 	header.Project = UI.Dropdown(header, 176, function(value)
 		M.newProject = value ~= "" and value or nil
 		M.newModel, M.newEffort = nil, nil
@@ -408,12 +411,12 @@ end
 
 function M:HeaderAction()
 	local t = ns.Store:Thread(ns.viewId)
-	if not t then return end
-	if t.s == "settled" then
-		ns.Transport:Send("unsettle", t.id)
+	if not t or t.mc then return end
+	if t.s == "closed" then
+		ns.Transport:Send("reopen", t.id)
 		PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
 	else
-		ns.Transport:Send("settle", t.id)
+		ns.Transport:Send("close", t.id)
 		PlaySound(SOUNDKIT.IG_QUEST_LIST_COMPLETE or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
 	end
 end
@@ -653,7 +656,6 @@ function M:Refresh()
 		f.Subtitle:SetText("Message an Agent")
 		header.Text:SetText(ns.Color("gold", "Message"))
 		header.Action:Hide()
-		header.Archive:Hide()
 		header.Project:Show()
 		self:SetupProjectDropdown()
 		local withModel = self:SetupModelDropdown()
@@ -690,28 +692,32 @@ function M:Refresh()
 			local status = ns.Color(ns.Store.StatusColor(t.s), ns.Store.StatusText(t.s))
 			local age = (t.s == "working" and t.st) and ns.Duration(time() - t.st) or ns.Ago(t.u)
 			header.Text:SetText(string.format("%s  ·  %s  ·  %s", status, ns.Store:ProjectLabel(t.p), age))
-			header.Action:SetShown(true)
-			header.Action:SetText(t.s == "settled" and "Reopen" or "Settle")
-			header.Archive:SetShown(t.s == "settled")
+			-- Close and Reopen are for side threads; a main chat can't be closed.
+			local closable = not t.mc
+			header.Action:SetShown(closable)
+			header.Action:SetText(t.s == "closed" and "Reopen" or "Close")
 			local withModel = self:SetupModelDropdown()
 			local withEffort = withModel and self:SetupEffortDropdown()
 			if not withEffort then header.Effort:Hide() end
 			header.Model.tipBody = "The agent's model, for all its threads. A change applies from its next reply on."
 			header.Effort.tipBody = "How hard the agent's model reasons, in all its threads. A change applies from its next reply on."
-			local anchor = t.s == "settled" and header.Archive or header.Action
 			header.Effort:ClearAllPoints()
-			header.Effort:SetPoint("RIGHT", anchor, "LEFT", -4, 0)
 			header.Model:ClearAllPoints()
-			header.Model:SetPoint("RIGHT", withEffort and header.Effort or anchor, "LEFT", -4, 0)
+			if closable then
+				header.Effort:SetPoint("RIGHT", header.Action, "LEFT", -4, 0)
+				header.Model:SetPoint("RIGHT", withEffort and header.Effort or header.Action, "LEFT", -4, 0)
+			else
+				header.Effort:SetPoint("RIGHT", -6, 0)
+				header.Model:SetPoint("RIGHT", withEffort and header.Effort or header, withEffort and "LEFT" or "RIGHT", withEffort and -4 or -6, 0)
+			end
 			local pickers = (withModel and header.Model:GetWidth() + 4 or 0) + (withEffort and header.Effort:GetWidth() + 4 or 0)
-			header.Text:SetPoint("RIGHT", (t.s == "settled" and -200 or -110) - pickers, 0)
+			header.Text:SetPoint("RIGHT", (closable and -110 or -10) - pickers, 0)
 			local placeholder = t.sd and "Reply to this side thread in OpenBot" or (t.s == "working" and "Steer the agent" or "Message the agent")
 			self:SetPlaceholder(placeholder .. "  (Shift+Enter for a new line)")
 		else
 			f.Subtitle:SetText(ns.Color("grey", "No thread selected"))
 			header.Text:SetText(ns.Color("grey", "Pick a thread on the left, or message an agent"))
 			header.Action:Hide()
-			header.Archive:Hide()
 			header.Model:Hide()
 			header.Effort:Hide()
 		end

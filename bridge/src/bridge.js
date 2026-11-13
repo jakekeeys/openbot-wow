@@ -32,7 +32,7 @@ export { STATE_DIR, CONFIG_DIR } from './paths.js';
 const sec = (iso) => (iso ? Math.floor(Date.parse(iso) / 1000) : undefined);
 
 const ACTIVE = new Set(['working', 'input', 'plan']);
-const ORDER = { input: 0, plan: 1, working: 2, failed: 3, open: 4, settled: 5 };
+const ORDER = { input: 0, plan: 1, working: 2, failed: 3, open: 4, closed: 5 };
 
 export function activityLabel(projection) {
   if (!projection) return null;
@@ -476,14 +476,18 @@ export class Bridge {
           await this.ob.interrupt(a0);
           msg = 'Stopped';
           break;
+        // Close and reopen a side thread. settle, unsettle and archive are what earlier versions
+        // of the addon send for the same buttons.
+        case 'close':
         case 'settle':
-          await this.ob.settle(a0);
-          break;
-        case 'unsettle':
-          await this.ob.unsettle(a0);
-          break;
         case 'archive':
-          await this.ob.archive(a0);
+          await this.ob.close(a0);
+          msg = 'Closed';
+          break;
+        case 'reopen':
+        case 'unsettle':
+          await this.ob.reopen(a0);
+          msg = 'Reopened';
           break;
         case 'read':
           await this.ob.visit(a0);
@@ -717,12 +721,13 @@ export class Bridge {
     const ob = this.ob;
     const projects = [];
     const usedProjects = new Set();
+    // A closed side thread leaves the list; the one being read stays, so it can be reopened.
+    const viewing = this.client?.view;
     let threads = [...ob.threads.values()]
       .map((t) => ({ t, s: threadStatus(t) }))
-      .filter(({ s }) => s !== 'archived');
+      .filter(({ t, s }) => s !== 'closed' || t.id === viewing);
     threads.sort((a, b) => ORDER[a.s] - ORDER[b.s] || Date.parse(b.t.updatedAt) - Date.parse(a.t.updatedAt));
-    let settled = 0;
-    threads = threads.filter(({ s }) => s !== 'settled' || ++settled <= 30).slice(0, 90);
+    threads = threads.slice(0, 90);
     const list = threads.map(({ t, s }) => {
       usedProjects.add(t.projectId);
       const v = this.views.get(t.id);
@@ -732,7 +737,7 @@ export class Bridge {
       else if (s === 'input') label = t.pendingRuntimeRequest?.kind === 'user_input' ? 'Needs your answer' : 'Needs your approval';
       else if (s === 'plan') label = 'Plan ready';
       else if (s === 'failed') label = t.lastError ? `Failed: ${String(t.lastError).slice(0, 60)}` : 'Failed';
-      else if (s === 'settled') label = 'Settled';
+      else if (s === 'closed') label = 'Closed';
       else label = t.status === 'interrupted' ? 'Stopped' : 'Finished';
       const last = proj ? lastAssistantText(proj) : t.latestVisibleMessage?.role === 'assistant' ? t.latestVisibleMessage.text : null;
       return {
@@ -745,7 +750,11 @@ export class Bridge {
         // (the game shows elapsed time), so leave it out to avoid pointless publishes.
         u: s === 'working' ? undefined : sec(t.updatedAt),
         st: sec(t.activityRunStartedAt || t.latestRunStartedAt),
-        un: s !== 'settled' && isUnread(t) ? true : undefined,
+        un: s !== 'closed' && isUnread(t) ? true : undefined,
+        // An agent's main chat: its permanent conversation, which can't be closed.
+        mc: t._main ? true : undefined,
+        // A side thread that closing only hides in the game (this computer without a sign-in).
+        lc: !t._main && t._closeLocal ? true : undefined,
         br: t.branch ? escapeWow(t.branch) : undefined,
         m: t.modelSelection?.model,
         mi: t.modelSelection?.instanceId,
@@ -757,7 +766,7 @@ export class Bridge {
         sd: t._main === false && !t._canReply ? true : undefined,
         // A run the game can stop (servers can; this computer's Local scripts can't).
         ks: s === 'working' && t._canStop ? true : undefined,
-        last: last && ACTIVE.has(s) === false && s !== 'settled' ? escapeWow(firstLine(last, 160)) : undefined,
+        last: last && ACTIVE.has(s) === false && s !== 'closed' ? escapeWow(firstLine(last, 160)) : undefined,
       };
     });
     for (const p of ob.projects.values()) {
@@ -847,7 +856,6 @@ export class Bridge {
       },
       projects,
       threads: list,
-      older: ob.olderSettled || undefined,
       view,
       usage,
       dict: this.dictation,

@@ -91,7 +91,7 @@ C  id  verb  args…                      (one per queued command)
 - Verbs:
   - `send`, `new`, `stop`
   - `model` (`threadId instanceId model [effort]`). `new` takes the same `instanceId model [effort]` after its text; without a model the agent keeps its own, and an empty `instanceId model` with an `effort` sets only the reasoning level on that default. `effort` is a level id from the model's list (`low`, `high`, …); without it the thread keeps the options last used with that model
-  - `settle`, `unsettle`, `archive`, `read`
+  - `close`, `reopen` (a side thread; `settle`, `archive` and `unsettle` from earlier addons mean the same), `read`
   - `approve`, `answer`
   - `speak`, `say`, `hush`, `dictate`
   - `ping`
@@ -185,7 +185,7 @@ When few slots remain, intervals stretch 2–4×. When they run out, the addon o
   - `GET /v1/agents/:id/pending`, `POST …/prompts/:requestId/answer`, `POST …/approvals/:requestId/respond`
   - `POST /v1/agents/:id/settings`: model and reasoning level (per agent, not per thread)
 - **Not available:** stopping a run, replying in a side thread, and OpenBot's model list (the bridge offers the models agents use plus `models` from its config).
-- **Local only:** settled, archived and read marks live in the bridge's `threads.json`. A new run clears settled and archived.
+- **Closing:** a main chat can't be closed. A side thread closed from the game gets a mark in the bridge's `threads.json` that only hides it here (Local scripts can't close it in OpenBot), until it runs again. Signed in, Close and Reopen are OpenBot's own `/v1/agent-tasks/close` and `/reopen`. Rows carry `mc` for a main chat and `lc` for a side thread that closing only hides here; closed side threads leave the snapshot except the one being read, so it can be reopened.
 - **Screenshots** are saved as files in `~/OpenBot/Shared/wow-screenshots` (or `screenshotDir` in the config), and the message names the path so the agent can open it.
 - **Without Local scripts** an agent can still be read, and an open question still shows as "needs you" (from the database); messaging and answering need Local scripts on for that agent. Each message counts toward the agent's Local scripts limit (30 an hour by default).
 

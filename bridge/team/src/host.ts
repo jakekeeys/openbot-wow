@@ -52,11 +52,13 @@ interface Chat {
   unread: number | null;
 }
 
+// The bridge's own marks: only when a thread was last read in the game. Closing is OpenBot's.
 interface Marks {
-  settled: Record<string, string>;
-  archived: Record<string, string>;
   visited: Record<string, string>;
 }
+
+// Closed side threads stay known for a day, so the one you just closed can be reopened.
+const CLOSED_KEEP_MS = 24 * 60 * 60 * 1000;
 
 export class TeamHostClient extends EventEmitter {
   state: "disconnected" | "connecting" | "connected" | "offline" = "disconnected";
@@ -73,6 +75,9 @@ export class TeamHostClient extends EventEmitter {
   private taskProgress = new Map<string, string>();
   private taskRevs = new Map<string, number>();
   private taskUnread = new Map<string, number>();
+  // When each side thread was last seen starting a run (the task has no run start of its own).
+  private taskRunStart = new Map<string, string>();
+  private taskRunning = new Set<string>();
   private pending = new Map<string, S.Pending>();
   private peer: PeerLike | null = null;
   private requests = 0;
@@ -493,8 +498,7 @@ export class TeamHostClient extends EventEmitter {
           // OpenBot's own read mark: with nothing unread, the last run counts as seen.
           lastVisitedAt: chat.unread === 0 ? finished : null,
           lastError: sum.failed ? "The run failed" : null,
-          settledOverride: null,
-          archivedAt: null,
+          closedAt: null,
           modelSelection: S.selectionOf(agent),
           latestVisibleMessage: sum.lastReply ? { role: "assistant", text: sum.lastReply.text } : null,
           pendingRuntimeRequest: null,
@@ -508,12 +512,17 @@ export class TeamHostClient extends EventEmitter {
           _pending: null,
         }),
       );
-      const tasks = (this.tasks.get(agent.id) ?? [])
-        .filter((t) => t.state !== "closed")
-        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
-        .slice(0, SIDE_THREADS);
-      for (const t of tasks) {
+      const all = (this.tasks.get(agent.id) ?? []).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+      const open = all.filter((t) => t.state !== "closed").slice(0, SIDE_THREADS);
+      // Recently closed ones too: the bridge leaves them out of the list, but keeps the one being read.
+      const closed = all.filter((t) => t.state === "closed" && Date.now() - Date.parse(t.closedAt ?? t.updatedAt) < CLOSED_KEEP_MS).slice(0, 5);
+      for (const t of [...open, ...closed]) {
         const working = t.state === "running" || t.state === "queued";
+        if (working && !this.taskRunning.has(t.id)) {
+          this.taskRunning.add(t.id);
+          this.taskRunStart.set(t.id, t.updatedAt);
+        } else if (!working) this.taskRunning.delete(t.id);
+        const runStart = this.taskRunStart.get(t.id) ?? null;
         out.push(
           this.withMarks({
             id: `t:${t.id}`,
@@ -524,13 +533,12 @@ export class TeamHostClient extends EventEmitter {
             status: working ? "running" : t.outcome ?? "idle",
             activityRunStatus: working ? "running" : null,
             activeRunId: t.activeTurnId,
-            activityRunStartedAt: working ? t.updatedAt : null,
-            latestRunStartedAt: t.createdAt,
+            activityRunStartedAt: working ? runStart : null,
+            latestRunStartedAt: runStart,
             latestRunCompletedAt: working ? null : t.updatedAt,
             lastVisitedAt: !working && this.taskUnread.get(t.id) === 0 ? t.updatedAt : null,
             lastError: t.outcome === "failed" ? t.error || "The task failed" : null,
-            settledOverride: null,
-            archivedAt: null,
+            closedAt: t.state === "closed" ? (t.closedAt ?? t.updatedAt) : null,
             modelSelection: S.selectionOf(agent),
             latestVisibleMessage: null,
             pendingRuntimeRequest: null,
@@ -744,19 +752,26 @@ export class TeamHostClient extends EventEmitter {
     this.rebuild();
   }
 
-  // Settled and archived are the bridge's own marks, as for this computer. A read also moves
-  // OpenBot's read mark of a main chat.
-  settle(threadId: string) {
-    this.mark("settled", threadId, true);
+  // Closing a side thread is OpenBot's own close, as on the desktop and the phone: it leaves
+  // the list, and comes back when it's reopened or runs again. An agent's main chat is its
+  // permanent conversation and can't be closed.
+  async close(threadId: string) {
+    await this.taskAction(threadId, "close");
   }
 
-  unsettle(threadId: string) {
-    this.mark("settled", threadId, false);
+  async reopen(threadId: string) {
+    await this.taskAction(threadId, "reopen");
   }
 
-  archive(threadId: string) {
-    this.mark("archived", threadId, true);
+  private async taskAction(threadId: string, action: "close" | "reopen") {
+    const t = this.thread(threadId);
+    if (t._main || !t._task) throw new Error("An agent's main chat can't be closed.");
+    await this.request("POST", `/v1/agent-tasks/${action}`, { agentId: t._agent, taskId: t._task });
+    await this.loadTasks(t._agent);
+    this.rebuild();
   }
+
+  // Reading a thread in the game moves OpenBot's read mark too.
 
   visit(threadId: string) {
     const t = this.thread(threadId);
@@ -792,17 +807,10 @@ export class TeamHostClient extends EventEmitter {
     this.rebuild();
   }
 
-  // A new run clears settled and archived.
+  // The later of the game's read mark and OpenBot's own.
   private withMarks(t: S.Thread): S.Thread {
-    const started = t.latestRunStartedAt ? Date.parse(t.latestRunStartedAt) : 0;
-    const holds = (iso?: string) => !!iso && started <= Date.parse(iso);
     const visited = [this.marks.visited[t.id], t.lastVisitedAt].filter((x): x is string => !!x).sort().at(-1) ?? null;
-    return {
-      ...t,
-      settledOverride: holds(this.marks.settled[t.id]) ? "settled" : null,
-      archivedAt: holds(this.marks.archived[t.id]) ? this.marks.archived[t.id] : null,
-      lastVisitedAt: visited,
-    };
+    return { ...t, lastVisitedAt: visited };
   }
 
   private marksFile() {
@@ -812,9 +820,10 @@ export class TeamHostClient extends EventEmitter {
   private loadMarks(): Marks {
     try {
       const d = JSON.parse(fs.readFileSync(this.marksFile(), "utf8"));
-      return { settled: d.settled ?? {}, archived: d.archived ?? {}, visited: d.visited ?? {} };
+      // Settled and archived marks from earlier versions are left out: OpenBot has no such states.
+      return { visited: d.visited ?? {} };
     } catch {
-      return { settled: {}, archived: {}, visited: {} };
+      return { visited: {} };
     }
   }
 
@@ -833,7 +842,7 @@ async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<u
 }
 
 function signature(t: S.Thread) {
-  return JSON.stringify([t.title, t.status, t.activeRunId, t.latestRunCompletedAt, t.lastError, t.settledOverride, t.archivedAt, t.lastVisitedAt, t._rev, t._pending?.requestId, t.modelSelection]);
+  return JSON.stringify([t.title, t.status, t.activeRunId, t.latestRunCompletedAt, t.lastError, t.closedAt, t.lastVisitedAt, t._rev, t._pending?.requestId, t.modelSelection]);
 }
 
 export function createHostClient(input: ConstructorParameters<typeof TeamHostClient>[0]) {

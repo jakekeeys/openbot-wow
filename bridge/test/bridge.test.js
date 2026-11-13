@@ -31,7 +31,8 @@ function fakeBridge(slots = 8) {
   const calls = [];
   b.ob.sendMessage = async (...a) => calls.push(['send', ...a]);
   b.ob.launchThread = async (...a) => (calls.push(['new', ...a]), { threadId: 'new-thread' });
-  b.ob.settle = async (...a) => calls.push(['settle', ...a]);
+  b.ob.close = async (...a) => calls.push(['close', ...a]);
+  b.ob.reopen = async (...a) => calls.push(['reopen', ...a]);
   b.ob.respondAnswers = async (...a) => calls.push(['answer', ...a]);
   b.ob.threadProjection = async () => ({ messages: [], turnItems: [], runtimeRequests: [], runs: [] });
   b.ob.threads.set('t1', { id: 't1', title: 'Fix | the build', projectId: 'p1', status: 'running', activityRunStatus: 'running', updatedAt: new Date().toISOString() });
@@ -402,10 +403,37 @@ test('errors reach the game as their first line', () => {
   assert.equal(friendlyError('Turn on Local scripts\n  at x'), 'Turn on Local scripts');
 });
 
-test('a thread waiting on you shows that before settled', async () => {
+test('a closed side thread shows as closed until it waits on you or runs again; a main chat never does', async () => {
   const { threadStatus } = await import('../src/openbot.js');
-  const t = { status: 'completed', settledOverride: 'settled' };
-  assert.equal(threadStatus(t), 'settled');
+  const t = { status: 'completed', closedAt: '2026-11-13T00:00:00.000Z', _main: false };
+  assert.equal(threadStatus(t), 'closed');
+  assert.equal(threadStatus({ ...t, _main: true }), 'open', 'a main chat is never closed');
   assert.equal(threadStatus({ ...t, pendingRuntimeRequest: { kind: 'user_input' } }), 'input');
-  assert.equal(threadStatus({ ...t, settledOverride: null, lastError: 'boom' }), 'failed');
+  assert.equal(threadStatus({ ...t, activityRunStatus: 'running' }), 'working');
+  assert.equal(threadStatus({ ...t, closedAt: null, lastError: 'boom' }), 'failed');
+  assert.equal(threadStatus({ status: 'completed', settledOverride: 'settled' }), 'open', 'there is no settled state any more');
+});
+
+test('Close and Reopen reach the client, and so do the older addon\'s Settle, Archive and Reopen', async () => {
+  const { b, calls } = fakeBridge();
+  b.onFrame(frame(1, [['H', 1, 'sess', 'ui1', 1, 1, 0, 'o', 't1', '0.1.0'], ['C', 1, 'close', 't1'], ['C', 2, 'reopen', 't1'], ['C', 3, 'settle', 't1'], ['C', 4, 'archive', 't1'], ['C', 5, 'unsettle', 't1']]));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(calls.filter((c) => c[0] === 'close' || c[0] === 'reopen').map((c) => c[0]), ['close', 'reopen', 'close', 'close', 'reopen']);
+  assert.deepEqual(b.results.slice(0, 2).map((r) => r.msg), ['Closed', 'Reopened']);
+  b.stop();
+});
+
+test('closed side threads leave the list, except the one being read; rows say which are main chats', () => {
+  const { b } = fakeBridge();
+  const now = new Date().toISOString();
+  b.ob.threads.set('m1', { id: 'm1', title: 'Ada', projectId: 'p1', status: 'idle', updatedAt: now, _main: true });
+  b.ob.threads.set('x1', { id: 'x1', title: 'Fix it', projectId: 'p1', status: 'idle', updatedAt: now, _main: false, closedAt: now, _closeLocal: true });
+  let snap = b.buildSnapshot();
+  assert.equal(snap.threads.find((t) => t.id === 'm1').mc, true, 'a main chat is flagged');
+  assert.equal(snap.threads.find((t) => t.id === 'x1'), undefined, 'a closed side thread leaves the list');
+  b.onFrame(frame(1, [['H', 1, 'sess', 'ui1', 1, 1, 0, 'o', 'x1', '0.1.0']]));
+  snap = b.buildSnapshot();
+  const x1 = snap.threads.find((t) => t.id === 'x1');
+  assert.deepEqual([x1.s, x1.l, x1.mc, x1.lc], ['closed', 'Closed', undefined, true], 'the one being read stays, so it can be reopened');
+  b.stop();
 });

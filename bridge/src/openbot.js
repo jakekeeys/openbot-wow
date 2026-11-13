@@ -44,11 +44,12 @@ export function defaultScreenshotDir(stateDir) {
 
 // ---- thread helpers the bridge shares --------------------------------------------
 
+// A main chat is open, working, waiting on you or failed. A side thread can also be closed:
+// by OpenBot, or here only (see `close`). Waiting on you or running again comes first.
 export function threadStatus(t) {
-  if (t.archivedAt) return 'archived';
   if (t.pendingRuntimeRequest) return 'input';
   if (t.activityRunStatus) return 'working';
-  if (t.settledOverride === 'settled') return 'settled';
+  if (t.closedAt && !t._main) return 'closed';
   if (t.lastError) return 'failed';
   return 'open';
 }
@@ -267,7 +268,6 @@ export class OpenBotClient extends EventEmitter {
     this.threads = new Map();
     this.projects = new Map();
     this.agents = new Map(); // agentId -> agent record from OpenBot
-    this.olderSettled = 0;
     this.envs = [{ code: '', label: 'this computer', local: true }];
     this.api = { on: false, agents: new Set(), error: null, checkedAt: 0 };
     this.attention = new Map(); // agentId -> { prompts, approvals, browserTakeovers }
@@ -455,10 +455,9 @@ export class OpenBotClient extends EventEmitter {
     const failed = !running && turn?.status === 'failed';
     let lastError = null;
     if (failed) lastError = (turn && q.turnError?.get(turn.turn_id)?.error) || (isMain ? null : r.side_error) || 'The run failed';
-    // Local marks (settled, archived) hold until the agent runs again.
+    // A side thread closed from the game stays closed here until it runs again.
     const after = (iso) => iso && (!startedAt || Date.parse(startedAt) <= Date.parse(iso));
-    const settledAt = this.local.settled[id];
-    const archivedAt = this.local.archived[id];
+    const closedMark = isMain ? null : this.local.closed[id];
     const openbotRead = q.readAt?.get(id)?.at || null;
     const visited = [this.local.visited[id], openbotRead].filter(Boolean).sort().at(-1) || null;
     const updatedAt = [r.updated_at, reply?.created_at, turn?.completed_at, turn?.started_at].filter(Boolean).sort().at(-1) || r.created_at;
@@ -476,13 +475,14 @@ export class OpenBotClient extends EventEmitter {
       latestRunCompletedAt: finishedAt,
       lastVisitedAt: visited,
       lastError,
-      settledOverride: after(settledAt) ? 'settled' : null,
-      archivedAt: after(archivedAt) ? archivedAt : null,
+      closedAt: after(closedMark) ? closedMark : null,
       modelSelection: agentSelection(agent),
       latestVisibleMessage: reply ? { role: 'assistant', text: parseJson(reply.message_json)?.text || '' } : null,
       pendingRuntimeRequest: null,
       _main: isMain,
       _agent: agent.id,
+      // Local scripts can't close a side thread in OpenBot: closing one only hides it here.
+      _closeLocal: !isMain,
       _rev: rev ? `${rev.rev}:${rev.n}` : '0',
     };
   }
@@ -764,18 +764,17 @@ export class OpenBotClient extends EventEmitter {
     this.kick();
   }
 
-  // Settled, archived and read marks live with the bridge: OpenBot has no such
-  // states for a script to set. A new run clears settled and archived.
-  settle(threadId) {
-    return this.mark('settled', threadId, true);
+  // Without a sign-in the bridge reaches OpenBot through Local scripts, which can't close a side
+  // thread. Closing one here only hides it in the game, until it runs again or is reopened.
+  // An agent's main chat is its permanent conversation: it can't be closed.
+  close(threadId) {
+    if (this.threads.get(threadId)?._main) throw new Error("An agent's main chat can't be closed.");
+    return this.mark('closed', threadId, true);
   }
 
-  unsettle(threadId) {
-    return this.mark('settled', threadId, false);
-  }
-
-  archive(threadId) {
-    return this.mark('archived', threadId, true);
+  reopen(threadId) {
+    if (this.threads.get(threadId)?._main) throw new Error("An agent's main chat can't be closed.");
+    return this.mark('closed', threadId, false);
   }
 
   visit(threadId) {
@@ -795,10 +794,11 @@ export class OpenBotClient extends EventEmitter {
   }
 
   loadLocal() {
-    const empty = { settled: {}, archived: {}, visited: {} };
+    // Settled and archived marks from earlier versions are left out: OpenBot has no such states.
+    const empty = { closed: {}, visited: {} };
     try {
       const data = JSON.parse(fs.readFileSync(this.localFile(), 'utf8'));
-      return { settled: data.settled || {}, archived: data.archived || {}, visited: data.visited || {} };
+      return { closed: data.closed || {}, visited: data.visited || {} };
     } catch {
       return empty;
     }
@@ -816,5 +816,5 @@ export class OpenBotClient extends EventEmitter {
 // What makes a thread worth a change event: the bridge refreshes its view and may
 // announce it.
 function signature(t) {
-  return JSON.stringify([t.title, t.status, t.activeRunId, t.latestRunCompletedAt, t.lastError, t.settledOverride, t.archivedAt, t.lastVisitedAt, t._rev, t._pending?.requestId, t.modelSelection]);
+  return JSON.stringify([t.title, t.status, t.activeRunId, t.latestRunCompletedAt, t.lastError, t.closedAt, t.lastVisitedAt, t._rev, t._pending?.requestId, t.modelSelection]);
 }

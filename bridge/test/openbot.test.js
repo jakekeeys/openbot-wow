@@ -120,25 +120,37 @@ test('activity is the newest note of the running turn', () => {
   assert.equal(toMessage({ author: 'assistant', item_type: 'commentary', message_json: '{"text":"x"}' }), null);
 });
 
-test('settled and archived are local marks that a new run clears', async () => {
+test('a main chat can\'t be closed; a side thread closes in the game only, until it runs again', async () => {
   const { file, db } = makeDb();
-  const c = client(file);
+  // An earlier version's settle and archive marks are ignored.
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'obwow-state-'));
+  fs.writeFileSync(path.join(stateDir, 'threads.json'), JSON.stringify({ settled: { 'ada-main': '2099-01-01T00:00:00.000Z' }, archived: { 'bo-main': '2099-01-01T00:00:00.000Z' }, visited: {} }));
+  const c = client(file, { stateDir });
   await c.open();
   c.reload();
-  c.settle('ada-main');
-  c.archive('bo-main');
+  assert.equal(threadStatus(c.threads.get('ada-main')), 'open', 'an old settle mark is ignored');
+  assert.equal(threadStatus(c.threads.get('bo-main')), 'failed', 'an old archive mark is ignored');
+  assert.throws(() => c.close('ada-main'), /main chat can't be closed/);
+  // Ada's side thread finishes its run.
+  db.prepare("update projection_threads set active_turn_id = null where thread_id = 'ada-side'").run();
+  db.prepare("update projection_turns set status = 'completed', completed_at = ? where turn_id = 'turn-3'").run('2026-11-11T00:05:00.000Z');
   c.reload();
-  assert.equal(threadStatus(c.threads.get('ada-main')), 'settled');
-  assert.equal(threadStatus(c.threads.get('bo-main')), 'archived');
+  assert.equal(c.threads.get('ada-side')._closeLocal, true, 'Local scripts can\'t close it in OpenBot');
+  c.close('ada-side');
+  c.reload();
+  assert.equal(threadStatus(c.threads.get('ada-side')), 'closed');
+  c.reopen('ada-side');
+  c.reload();
+  assert.equal(threadStatus(c.threads.get('ada-side')), 'open');
+  c.close('ada-side');
   const later = new Date(Date.now() + 60000).toISOString();
-  db.prepare('insert into projection_turns values (?, ?, ?, ?, ?, ?, ?)').run('turn-9', 'ada-main', 'p', 'completed', later, later, 2);
+  db.prepare('insert into projection_turns values (?, ?, ?, ?, ?, ?, ?)').run('turn-9', 'ada-side', 'p', 'completed', later, later, 2);
   c.reload();
-  assert.equal(threadStatus(c.threads.get('ada-main')), 'open', 'the agent ran again');
+  assert.equal(threadStatus(c.threads.get('ada-side')), 'open', 'it ran again');
   c.visit('ada-main');
-  c.reload();
-  assert.equal(isUnread(c.threads.get('bo-main')), true);
-  const reopened = client(file, { stateDir: c.stateDir });
-  assert.ok(reopened.local.archived['bo-main'], 'marks survive a restart');
+  const saved = JSON.parse(fs.readFileSync(path.join(stateDir, 'threads.json'), 'utf8'));
+  assert.deepEqual(Object.keys(saved).sort(), ['closed', 'visited'], 'no settle or archive marks are written');
+  assert.ok(saved.closed['ada-side']);
   c.stop();
 });
 
