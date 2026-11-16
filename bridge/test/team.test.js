@@ -123,7 +123,13 @@ function fakeHost({ channels = false } = {}) {
   const peer = {
     execute: async (cmd) => {
       calls.push(cmd);
-      if (cmd.type === 'connect') return { commandId: cmd.id, ok: true };
+      if (cmd.type === 'connect') {
+        if (fake.failConnects > 0) {
+          fake.failConnects -= 1;
+          return { commandId: cmd.id, ok: false, error: 'OpenBot could not reach the OpenBot service. Check your connection.' };
+        }
+        return { commandId: cmd.id, ok: true };
+      }
       return answer(cmd);
     },
     dispose: async () => {},
@@ -132,7 +138,8 @@ function fakeHost({ channels = false } = {}) {
     actions = a;
     return peer;
   };
-  return { state, calls, createPeer, event: (e) => actions.current.onTeamEvent('host-1', e), update: (u) => actions.current.onConnectionUpdate({ hostId: 'host-1', message: null, ...u }) };
+  const fake = { failConnects: 0, state, calls, createPeer, event: (e) => actions.current.onTeamEvent('host-1', e), update: (u) => actions.current.onConnectionUpdate({ hostId: 'host-1', message: null, ...u }) };
+  return fake;
 }
 
 async function connected(fake, extra = {}) {
@@ -450,4 +457,42 @@ test('in the game, a channel row is flagged and its messages carry their speaker
   assert.deepEqual(snap.view.msgs.map((m) => [m.r, m.w]), [['u', undefined], ['u', 'Sam'], ['a', 'Ada'], ['a', 'Bo']]);
   remote.stop();
   b.stop();
+});
+
+test('failed reconnects keep being retried until one works', { skip }, async () => {
+  const fake = fakeHost();
+  const c = await connected(fake, { retryMs: 10 });
+  const connects = () => fake.calls.filter((x) => x.type === 'connect').length;
+  // The service is unreachable for the next two attempts (as on the night the servers dropped).
+  fake.failConnects = 2;
+  await fake.update({ state: 'offline', message: 'The direct connection to the host was lost.' });
+  await tick(400);
+  assert.equal(connects(), 4, 'two failed attempts, then one that worked');
+  assert.equal(c.state, 'connected');
+  c.stop();
+});
+
+test('a drop reported while an attempt is under way is still retried', { skip }, async () => {
+  const fake = fakeHost();
+  const c = await connected(fake, { retryMs: 10 });
+  const connects = () => fake.calls.filter((x) => x.type === 'connect').length;
+  fake.failConnects = 1;
+  await fake.update({ state: 'offline', message: 'lost' });
+  await fake.update({ state: 'offline', message: 'lost again' });
+  await tick(300);
+  assert.ok(connects() >= 3, `retried after the failed attempt (${connects()} connects)`);
+  assert.equal(c.state, 'connected');
+  c.stop();
+});
+
+test('the watchdog starts an attempt when a server is offline with none under way', { skip }, async () => {
+  const fake = fakeHost();
+  const c = await connected(fake, { retryMs: 10, watchdogMs: 30 });
+  const connects = () => fake.calls.filter((x) => x.type === 'connect').length;
+  // Simulate a lost retry: offline, with no timer and no attempt.
+  c.setState('offline', 'stuck');
+  await tick(150);
+  assert.equal(connects(), 2, 'the watchdog tried again');
+  assert.equal(c.state, 'connected');
+  c.stop();
 });

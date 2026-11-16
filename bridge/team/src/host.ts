@@ -99,11 +99,16 @@ export class TeamHostClient extends EventEmitter {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
   private connecting = false;
+  private retryWanted = false;
+  // Set while OpenBot's relay holds an attempt for a server that's off.
+  private waitingSince: number | null = null;
+  private lastChange = Date.now();
+  private watchdog: ReturnType<typeof setInterval> | null = null;
   private makePeer: (() => PeerLike) | null = null;
   private marks: Marks;
 
   constructor(
-    private readonly input: { directory: Directory; host: Host; stateDir: string; config?: Record<string, unknown>; log?: Log; createPeer?: PeerFactory; retryMs?: number },
+    private readonly input: { directory: Directory; host: Host; stateDir: string; config?: Record<string, unknown>; log?: Log; createPeer?: PeerFactory; retryMs?: number; watchdogMs?: number },
   ) {
     super();
     this.origin = `${input.host.name} (OpenBot relay)`;
@@ -116,6 +121,7 @@ export class TeamHostClient extends EventEmitter {
 
   private setState(state: TeamHostClient["state"], error: string | null = null) {
     if (this.state === state && this.error === error) return;
+    this.lastChange = Date.now();
     this.state = state;
     this.error = error;
     this.emit("state", state, error);
@@ -142,11 +148,17 @@ export class TeamHostClient extends EventEmitter {
     const make: PeerFactory = this.input.createPeer ?? ((a, o) => createRemoteTeamPeer(a, o));
     this.makePeer = () => make(actions, { waitForHost: host.hosted === true });
     this.peer = this.makePeer();
+    // A safety net: a server that's been offline a while with no attempt under way gets one.
+    const every = this.input.watchdogMs ?? 60_000;
+    this.watchdog = setInterval(() => this.checkStuck(every), every);
+    this.watchdog.unref?.();
     void this.connect();
   }
 
   stop() {
     this.stopped = true;
+    if (this.watchdog) clearInterval(this.watchdog);
+    this.watchdog = null;
     for (const t of [this.flushTimer, this.retryTimer]) if (t) clearTimeout(t);
     const peer = this.peer;
     this.peer = null;
@@ -166,18 +178,22 @@ export class TeamHostClient extends EventEmitter {
       void old.dispose().catch(() => undefined);
     }
     this.setState("connecting");
+    let failure: unknown = null;
     try {
       const res = await this.peer.execute({ id: this.nextId(), type: "connect", hostId: this.input.host.hostId, hostPublicKey: this.input.host.devicePublicKey });
       if (!res.ok) throw new TeamRequestError(res.error ?? "No connection to the server.");
       await this.loadAll();
       if (this.attempt > 0) this.log("reconnected");
       this.attempt = 0;
+      this.retryWanted = false;
       this.setState("connected");
     } catch (err) {
-      this.failed(err);
+      failure = err;
     } finally {
       this.connecting = false;
     }
+    // Only now, with this attempt over, can the next one be scheduled.
+    if (failure) this.failed(failure);
   }
 
   private signInRevoked() {
@@ -186,6 +202,7 @@ export class TeamHostClient extends EventEmitter {
   }
 
   private failed(err: unknown) {
+    this.retryWanted = false;
     if (isSignInRevoked(err)) return this.signInRevoked();
     const message = err instanceof Error ? err.message : String(err);
     this.log(message);
@@ -196,7 +213,13 @@ export class TeamHostClient extends EventEmitter {
   // As OpenBot's apps do (createRemoteConnectionRecovery): a lost connection is tried again after
   // 2, 4, 8 and 16 seconds, then every 30 seconds, with up to a fifth added at random.
   private scheduleRetry() {
-    if (this.stopped || this.retryTimer || this.connecting) return;
+    if (this.stopped || this.retryTimer) return;
+    // During an attempt, the attempt's own failure schedules the next one.
+    if (this.connecting) {
+      this.retryWanted = true;
+      return;
+    }
+    this.retryWanted = false;
     this.attempt += 1;
     const first = this.input.retryMs ?? 2_000;
     const base = this.attempt > 4 ? first * 15 : first * 2 ** (this.attempt - 1);
@@ -209,7 +232,18 @@ export class TeamHostClient extends EventEmitter {
     );
   }
 
+  private checkStuck(every: number) {
+    if (this.stopped || this.connecting || this.retryTimer || this.state === "connected") return;
+    if (Date.now() - this.lastChange < every) return;
+    // The relay holds an attempt for a server that's off; give it a quarter of an hour first.
+    if (this.waitingSince && Date.now() - this.waitingSince < 15 * 60_000) return;
+    this.log("no attempt under way; trying again");
+    this.waitingSince = null;
+    this.scheduleRetry();
+  }
+
   private onConnectionUpdate(update: RemoteTeamConnectionUpdate) {
+    this.waitingSince = update.state === "connecting" && update.hostOffline ? (this.waitingSince ?? Date.now()) : null;
     if (update.state === "online") {
       this.attempt = 0;
       if (update.resync) void this.loadAll().catch((err) => this.log(`resync: ${(err as Error).message}`));
