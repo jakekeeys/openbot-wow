@@ -1,5 +1,6 @@
 ## Interface: 16001
 ## Title: OpenBot
+## Group: OpenBot
 ## Notes: Watch and message your OpenBot agents from inside the game. Needs the openbot-wow bridge running on this computer.
 ## Author: Ryan Hughes (T3 Code for WoW); OpenBot port
 ## Version: 0.1.0
@@ -26,5 +27,6 @@ UI\Settings.lua
 UI\Tracker.lua
 UI\Toasts.lua
 UI\Minimap.lua
+UI\AddonList.lua
 UI\Gamepad.lua
 Core\Slash.lua

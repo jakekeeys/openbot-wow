@@ -220,6 +220,8 @@ function L:PickServer(value)
 	if p and value ~= "all" and ns.Store.ServerOf(p) ~= value then s.project = "all" end
 	L:Refresh(true)
 	ns.Main:Refresh()
+	-- Tracker lines name servers other than the picked one, and it only redraws on new data.
+	ns.Tracker:Refresh()
 end
 
 -- Filters saved before the server picker were "m:<label>" agent filters.
@@ -306,7 +308,7 @@ function L:Refresh(force)
 		if not ns.Store:Servers() or (e and e.state == "connected") then s.project = "all" end
 	end
 	local key = table.concat({
-		ns.Store.applied, s.project, tostring(s.server), tostring(s.collapsed.working), tostring(s.collapsed.open),
+		ns.Store.listKey or "", s.project, tostring(s.server), tostring(s.collapsed.working), tostring(s.collapsed.open),
 		tostring(ns.viewId), ns.Main.mode, self.query or "",
 	}, ":")
 	if key == self.key and not force then

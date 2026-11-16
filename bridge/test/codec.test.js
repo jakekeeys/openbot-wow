@@ -1,9 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { encodeFrame, decodeImage, renderCells, cellsToBytes, bytesToCells, MAX_PAYLOAD, parsePPM, parseBMP, parseQImage } from '../src/codec.js';
+import { StripCapture } from '../src/capture.js';
+import { deriveKeys, open } from '../src/strip-crypto.js';
+import { luaAssignment } from '../src/luaser.js';
+import { roundCorner } from './rounded-corner.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const lua = ['lua5.1', 'luajit', 'lua'].find((bin) => {
@@ -89,6 +96,32 @@ test('Lua encoder matches JS encoder', { skip: !lua && 'no lua interpreter' }, (
   assert.deepEqual(fromLua, fromJs);
 });
 
+// The strip the addon draws with its keys and a queued message: its cells and where its
+// top-left corner is, in physical pixels from the game's.
+function addonStrip(keys) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'obwow-slot-'));
+  const slot = path.join(dir, 'Inbox.lua');
+  fs.writeFileSync(slot, luaAssignment('OpenBot_Inbox', { v: 1, gen: 5, now: 1, nextSig: 1, key: keys.hex, threads: [], projects: [], usage: [], bridge: {} }));
+  const [cells, , origin] = execFileSync(lua, ['tools/strip_e2e.lua', 'addon/OpenBot', slot, 'thread-42', 'run the tests'], { cwd: root }).toString().trim().split('\n');
+  fs.rmSync(dir, { recursive: true, force: true });
+  const [ox, oy] = origin.split(',').map(Number);
+  return { cells: [...cells].map(Number), ox, oy };
+}
+
+test('the strip the addon draws is read through a window corner the desktop rounds, at 100 to 200 percent scaling', { skip: !lua && 'no lua interpreter' }, () => {
+  const keys = deriveKeys(crypto.randomBytes(32));
+  const { cells, ox, oy } = addonStrip(keys);
+  assert.ok(cells.length > 2 * 160, 'a frame of several rows');
+  const { width, height } = StripCapture.stripPixels(4);
+  for (const scale of [1, 1.25, 1.5, 1.75, 2]) {
+    const corner = (x, y) => roundCorner(renderCells(cells, { cell: 3, ox: x, oy: y, width, height, background: [40, 90, 60] }), 8 * scale);
+    const out = decodeImage(corner(ox, oy));
+    assert.ok(out && !out.error, `read at ${scale * 100}%: ${out ? out.error : 'no strip found'}`);
+    if (scale === 1) assert.deepEqual([out.geo.ox, out.geo.oy], [ox, oy], 'found at its own corner, so each cell is read at its centre');
+    assert.equal(open(keys, out.seq, out.payload).toString().split('\x1e').at(-1), 'C\x1f1\x1fsend\x1fthread-42\x1frun the tests\x1fauto');
+  }
+});
+
 test('parse ppm', () => {
   const header = Buffer.from('P6\n# comment\n2 1\n255\n', 'latin1');
   const img = parsePPM(Buffer.concat([header, Buffer.from([255, 0, 0, 0, 255, 0])]));
@@ -98,7 +131,7 @@ test('parse ppm', () => {
 });
 
 // A BMP like macOS screencapture writes: 32-bit with bitfields, or plain 24-bit, either row order.
-function toBMP(img, { bpp = 32, topDown = false } = {}) {
+function toBMP(img, { bpp = 32, topDown = false, rgbOrder = false } = {}) {
   const stride = Math.ceil((img.width * bpp) / 32) * 4;
   const header = bpp === 32 ? 54 + 12 : 54;
   const b = Buffer.alloc(header + stride * img.height);
@@ -112,15 +145,16 @@ function toBMP(img, { bpp = 32, topDown = false } = {}) {
   b.writeUInt16LE(bpp, 28);
   b.writeUInt32LE(bpp === 32 ? 3 : 0, 30);
   if (bpp === 32) {
-    b.writeUInt32LE(0x00ff0000, 54);
+    b.writeUInt32LE(rgbOrder ? 0x000000ff : 0x00ff0000, 54);
     b.writeUInt32LE(0x0000ff00, 58);
-    b.writeUInt32LE(0x000000ff, 62);
+    b.writeUInt32LE(rgbOrder ? 0x00ff0000 : 0x000000ff, 62);
   }
   for (let y = 0; y < img.height; y++) {
     const row = header + (topDown ? y : img.height - 1 - y) * stride;
     for (let x = 0; x < img.width; x++) {
       const [r, g, bl] = img.data.subarray((y * img.width + x) * 3, (y * img.width + x) * 3 + 3);
-      if (bpp === 32) b.writeUInt32LE(((0xff << 24) | (r << 16) | (g << 8) | bl) >>> 0, row + x * 4);
+      if (bpp === 32 && rgbOrder) b.writeUInt32LE(((0xff << 24) | (bl << 16) | (g << 8) | r) >>> 0, row + x * 4);
+      else if (bpp === 32) b.writeUInt32LE(((0xff << 24) | (r << 16) | (g << 8) | bl) >>> 0, row + x * 4);
       else b.set([bl, g, r], row + x * 3);
     }
   }
@@ -130,7 +164,7 @@ function toBMP(img, { bpp = 32, topDown = false } = {}) {
 test('BMP captures decode like PPM ones', () => {
   const cells = encodeFrame(7, 'hello from macOS');
   const img = renderCells(cells, { cell: 6, ox: 1, oy: 2, width: 161 * 6 + 3, height: 30 });
-  for (const opts of [{ bpp: 32 }, { bpp: 32, topDown: true }, { bpp: 24 }]) {
+  for (const opts of [{ bpp: 32 }, { bpp: 32, topDown: true }, { bpp: 24 }, { bpp: 32, rgbOrder: true }]) {
     const back = parseBMP(toBMP(img, opts));
     assert.deepEqual([back.width, back.height], [img.width, img.height]);
     assert.ok(back.data.equals(img.data), `pixels differ for ${JSON.stringify(opts)}`);

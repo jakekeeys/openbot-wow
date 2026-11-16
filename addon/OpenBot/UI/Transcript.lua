@@ -7,7 +7,7 @@ local UI = ns.UI
 local T = {}
 ns.Transcript = T
 
-T.echo = {}      -- threadId -> { text, at } sent but not yet in a snapshot
+T.echo = {}      -- threadId -> { text, at, after } sent but not yet in a snapshot
 T.answers = {}   -- requestId -> { [questionId] = { value = true, ... } }
 
 local QUICK_REPLIES = {
@@ -190,8 +190,20 @@ function T:Relayout()
 	if ns.Main.frame and ns.Main.frame:IsShown() then self:Refresh() end
 end
 
+-- The bridge reformats messages (markdown, escapes), so the echo is matched by
+-- time, not text: it goes once a message of yours arrives that is newer than the
+-- newest message shown when you sent it. Both times come from the server's clock.
+-- (Message numbers won't do: the bridge sends a bounded window and renumbers it.)
 function T:AddLocalEcho(threadId, text)
-	self.echo[threadId] = { text = text, at = time() }
+	local after
+	local v = ns.Store.data.view
+	if v and v.id == threadId and not v.loading then
+		after = 0
+		for _, m in ipairs(v.msgs or {}) do
+			if type(m.at) == "number" and m.at > after then after = m.at end
+		end
+	end
+	self.echo[threadId] = { text = text, at = time(), after = after }
 	self.followBottom = true
 	self:Refresh(true)
 end
@@ -200,6 +212,13 @@ end
 -- Building the element list
 
 T.heightFix = {} -- corrected row heights, by text and width
+
+-- Without the thread's messages at send time, compare with this PC's clock, with
+-- slack for an OpenBot server whose clock differs.
+local function EchoArrived(echo, m)
+	if echo.after then return type(m.at) == "number" and m.at > echo.after end
+	return type(m.at) == "number" and m.at >= echo.at - 30
+end
 
 local function MessageElement(msg, echo)
 	local width = T:BodyWidth()
@@ -312,7 +331,7 @@ function T:Elements()
 	local echo = self.echo[id]
 	for _, m in ipairs(v.msgs or {}) do
 		table.insert(list, MessageElement(m))
-		if echo and m.r == "u" and ns.StripMarkup(m.t):find(echo.text:sub(1, 40), 1, true) then
+		if echo and m.r == "u" and EchoArrived(echo, m) then
 			self.echo[id] = nil
 			echo = nil
 		end
@@ -406,11 +425,22 @@ end
 
 function T:Refresh(force)
 	if not self.scrollBox then return end
-	local v = ns.Store.data.view
 	local echo = ns.viewId and self.echo[ns.viewId]
+	-- What the rows show besides the transcript itself: quick replies and the failed
+	-- note follow the thread's status, and with no thread picked the note counts the
+	-- active threads and names the machine. None of that is part of the transcript the
+	-- bridge sends, so it goes in the key.
+	local t = ns.Store:Thread(ns.viewId)
+	local context
+	if ns.viewId then
+		context = t and ((t.s or "") .. "|" .. (t.l or "")) or "gone"
+	else
+		context = (ns.Store.listKey or "") .. "|" .. tostring((ns.Store.data.bridge or {}).host or "")
+			.. "|" .. tostring(ns.Gamepad and ns.Gamepad:IsActive())
+	end
 	local key = table.concat({
-		ns.Store.applied, tostring(ns.viewId), ns.Main.mode, tostring(v and v.id),
-		echo and echo.at or 0, math.floor(self:BodyWidth()),
+		tostring(ns.viewId), ns.Store.viewKey or "", ns.Main.mode, context,
+		echo and time() - echo.at < 120 and echo.at or 0, math.floor(self:BodyWidth()),
 	}, ":")
 	if key == self.key and not force then
 		self.scrollBox:ForEachFrame(function(frame, ed)

@@ -31,6 +31,10 @@ export { STATE_DIR, CONFIG_DIR } from './paths.js';
 
 const sec = (iso) => (iso ? Math.floor(Date.parse(iso) / 1000) : undefined);
 
+// A short, stable hash of one part of a snapshot. The addon reports the ones it holds
+// in its hello, and a publish leaves out a part whose hash hasn't changed since.
+const fingerprint = (value) => createHash('sha1').update(JSON.stringify(value)).digest('hex').slice(0, 16);
+
 const ACTIVE = new Set(['working', 'input', 'plan']);
 const ORDER = { input: 0, plan: 1, working: 2, failed: 3, open: 4, closed: 5 };
 
@@ -184,6 +188,11 @@ export function parseFrame(payload) {
         version: f[9] || '',
         slots: Number(f[10]) || 0,
         models: f[11] || '',
+        // What the addon already holds: the thread list, the project list and the
+        // transcript. A publish leaves those out when they haven't changed since.
+        list: f[12] || '',
+        projects: f[13] || '',
+        viewHash: f[14] || '',
       };
     } else if (f[0] === 'C') {
       out.commands.push({ id: Number(f[1]), verb: f[2], args: f.slice(3) });
@@ -270,16 +279,23 @@ export class Bridge {
     this.log(`speech: ${v.tts || 'none'}; dictation: ${v.dictation || 'none'}; capture: ${this.capture.resolveBackend()}`);
     this.ob.on('state', (s, e) => {
       this.log(`OpenBot: ${s}${e ? ` (${e})` : ''}`);
+      this.omarchyUsage.refresh(this.usageInstances());
       this.markDirty('important');
     });
     this.ob.on('change', (ev) => this.onChange(ev));
-    this.ob.on('config', () => this.markDirty('minor'));
+    this.ob.on('config', () => {
+      // The providers (and so the usage records to read) are only known once this
+      // arrives; the 60 s timer alone would leave the Usage tab empty for a minute.
+      this.omarchyUsage.refresh(this.usageInstances());
+      this.markDirty('minor');
+    });
     this.ob.start();
     this.servers = startServers({ fleet: this.ob, stateDir: this.stateDir, config: this.config, log: this.log });
     this.checkProcess();
     this.procTimer = setInterval(() => this.checkProcess(), 4000);
     this.statusTimer = setInterval(() => this.writeStatus(), 3000);
     // Pick up new Omarchy usage records (the shell's Agents panel refreshes them).
+    this.omarchyUsage.refresh(this.usageInstances());
     this.usageTimer = setInterval(() => this.omarchyUsage.refresh(this.usageInstances()), 60000);
     this.capture.prepare();
     this.captureLoop();
@@ -337,10 +353,12 @@ export class Bridge {
         } else {
           this.captureState = res.status === 'empty' ? (this.client ? 'idle' : 'waiting') : res.status;
           if (res.status === 'error' && this.capture.stats.captures % 50 === 1) this.log(`capture: ${res.error}`);
-          if (res.status === 'hidden' || res.status === 'no-window') delay = 1000;
+          if (res.status === 'hidden' || res.status === 'no-window') delay = 2000;
           if (Date.now() - this.capture.lastSeenAt < 4000) delay = 150;
           else if (this.client?.flags.includes('o') && res.status === 'empty') delay = 200;
-          else if (this.client && res.status === 'empty') delay = 700; // window closed: nothing urgent
+          // Window closed: nothing urgent, and each poll is a new screencapture
+          // process (plus a window lookup), so take it easy.
+          else if (this.client && res.status === 'empty') delay = 1500;
         }
       }
       await new Promise((r) => setTimeout(r, delay));
@@ -370,7 +388,7 @@ export class Bridge {
     let c = this.client;
     if (!c || c.ui !== hello.ui || c.session !== hello.session) {
       this.log(`addon connected (ui ${hello.ui}, slot ${hello.slot}, signal ${hello.sig}, addon ${hello.version})`);
-      c = this.client = { session: hello.session, ui: hello.ui, ackedSeq: -1, flags: '', view: '' };
+      c = this.client = { session: hello.session, ui: hello.ui, ackedSeq: -1, flags: '', view: '', hashes: {} };
       c.slotNext = hello.slot;
       this.persist.sigCounter = Math.max(this.persist.sigCounter, hello.sig);
       this.markDirty('important');
@@ -406,6 +424,16 @@ export class Bridge {
     c.version = hello.version;
     // Which model list the addon holds; it's only sent again when this differs.
     c.modelsHash = hello.models;
+    // What it holds of the parts a publish may leave out. Only trust a hello that has
+    // applied our latest publish: that's the one point where it can't have moved on
+    // since it spoke. The strip stays on screen and is decoded again on every poll, so
+    // this is also what keeps a pre-publish hello from re-arming what `publishNow`
+    // cleared.
+    // An unencrypted hello is only a bare hello: nothing in it is trusted.
+    if (!sealed) c.hashes = {};
+    else if (hello.gen >= this.lastGen) {
+      c.hashes = { list: hello.list, projects: hello.projects, view: hello.viewHash };
+    }
     c.lastSeen = Date.now();
     this.persist.slotGuess = c.slotNext;
 
@@ -809,6 +837,9 @@ export class Bridge {
           // `w`: who said it, in a channel (several agents and people); not set for your own messages.
           out.unshift({ r: m.role === 'user' ? 'u' : 'a', t: text, at: sec(m.createdAt), live: m.streaming || undefined, n: i + 1, w: m.who ? escapeWow(m.who) : undefined });
         }
+        // Each of these walks the whole turn, so ask once.
+        const plan = t && threadStatus(t) === 'plan' ? proposedPlan(p) : null;
+        const sum = runSummary(p);
         view = {
           id: viewId,
           msgs: out,
@@ -816,8 +847,8 @@ export class Bridge {
           pending: pendingRequest(p) || undefined,
           act: t && threadStatus(t) === 'working' ? escapeWow(activityLabel(p) || 'Working') : undefined,
           err: t?.lastError ? escapeWow(String(t.lastError).slice(0, 300)) : undefined,
-          plan: t && threadStatus(t) === 'plan' && proposedPlan(p) ? markdownToWow(proposedPlan(p), { maxChars: 6000 }) : undefined,
-          sum: runSummary(p) ? escapeWow(runSummary(p)) : undefined,
+          plan: plan ? markdownToWow(plan, { maxChars: 6000 }) : undefined,
+          sum: sum ? escapeWow(sum) : undefined,
           queued: (p.runs || []).filter((r) => r.status === 'queued').length || undefined,
           shots: this.shots.get(viewId)?.length || undefined,
         };
@@ -830,12 +861,16 @@ export class Bridge {
     const models = this.modelsSection();
 
     const usage = [];
-    this.omarchyUsage.refresh(this.usageInstances());
     const enabled = (ob.config?.providers || []).filter((p) => p.enabled && (p.usageLimits || this.omarchyUsage.forInstance(p.instanceId)));
     for (const p of enabled) {
       usage.push(mergeUsage(p, this.omarchyUsage.forInstance(p.instanceId), { escape: escapeWow, sec }));
     }
 
+    // Every server, with its code, whenever the bridge is signed in (even with one), so the
+    // addon's server picker can name each one, including those that are offline.
+    const envs = ob.envs.length > 1 || (this.relayState() && this.relayState() !== 'off')
+      ? ob.environments().map((e) => ({ c: e.code, label: escapeWow(e.label), state: e.state, local: e.local, n: e.threads, err: e.state !== 'connected' && e.error ? escapeWow(String(e.error).slice(0, 90)) : undefined }))
+      : undefined;
     return {
       bridge: {
         version: VERSION,
@@ -847,11 +882,7 @@ export class Bridge {
         dictation: voice.dictation || undefined,
         dictationHint: voice.hint || undefined,
         slots: this.bank.slots,
-        // Every server, with its code, whenever the bridge is signed in (even with one), so the
-        // addon's server picker can name each one, including those that are offline.
-        envs: ob.envs.length > 1 || (this.relayState() && this.relayState() !== 'off')
-          ? ob.environments().map((e) => ({ c: e.code, label: escapeWow(e.label), state: e.state, local: e.local, n: e.threads, err: e.state !== 'connected' && e.error ? escapeWow(String(e.error).slice(0, 90)) : undefined }))
-          : undefined,
+        envs,
         // How this computer is reached ('relay' or 'database'), and the bridge's OpenBot sign-in:
         // 'on', 'off' (not signed in) or 'error' (signed in, but the server list fails).
         via: ob.local?.via,
@@ -867,6 +898,15 @@ export class Bridge {
       // ~100 models is several KB, so only when the addon doesn't hold this list yet.
       models: models && this.client?.modelsHash !== models.h ? models : undefined,
       results: this.results.slice(-8).map(({ id, ok, msg, open }) => ({ id, ok, msg, open })),
+      // Short hashes of the parts a publish may leave out, and of the list the window
+      // redraws from. The addon reports them in its hello. The list also covers the
+      // machines the project filter offers, which the thread list itself doesn't.
+      x: {
+        // The servers too: the server picker redraws with the list.
+        l: fingerprint({ t: list, p: projects, e: envs }),
+        p: fingerprint(projects),
+        v: view ? fingerprint(view) : '',
+      },
     };
   }
 
@@ -937,7 +977,14 @@ export class Bridge {
   //  * new reply text goes fast only while the player is actually reading (flag "a");
   //  * activity-label churn and keep-alives are slow, slower still as slots run low;
   //  * the last RESERVE slots are kept for acks and alerts only.
+  // After a failed write, nothing goes before the retry time, acks included.
   nextPublishDelay() {
+    const delay = this.pacedDelay();
+    if (delay === null || !this.failures) return delay;
+    return Math.max(delay, this.failures.retryAt - Date.now());
+  }
+
+  pacedDelay() {
     const RESERVE = 20;
     const BATCH = 300; // let a burst of changes land in one update
     const c = this.client;
@@ -974,6 +1021,25 @@ export class Bridge {
       // Something may still be dirty (e.g. results) or a heartbeat is due later.
       if (this.client) this.schedulePublish();
     }, delay);
+  }
+
+  // The snapshot minus whatever the addon already holds. `hashes` is what its last
+  // hello reported; the parts whose hash still matches are left out, and `same` names
+  // them so the addon applies the rest on top of them instead of forgetting them. The
+  // thread list always goes: it changes with almost every update and is small.
+  static slimSnapshot(snapshot, hashes = {}) {
+    const same = [];
+    const out = { ...snapshot };
+    if (out.projects && hashes.projects && snapshot.x.p === hashes.projects) {
+      delete out.projects;
+      same.push('p');
+    }
+    if (out.view && hashes.view && snapshot.x.v === hashes.view) {
+      delete out.view;
+      same.push('v');
+    }
+    if (same.length) out.same = same.join('');
+    return out;
   }
 
   publishNow(reason) {
@@ -1025,13 +1091,21 @@ export class Bridge {
       nextSig: raise ? sig + 1 : counter,
       ack: c ? { ui: c.ui, seq: c.seq } : undefined,
       key: this.stripKeys.hex,
-      ...snapshot,
     };
     const targets = new Set([1, 2, 3]);
     for (let i = from; i <= to; i++) targets.add(i);
+    // Slots 1–3 are what a /reload bootstraps from, so they always carry everything.
+    // The rest can leave out what the addon says it already has, which keeps a 60 KB
+    // transcript off the disk (and out of Lua's parser) when it hasn't changed.
+    const bootstrap = [...targets].filter((i) => i <= 3);
+    const rotating = [...targets].filter((i) => i > 3);
     let bytes = 0;
     try {
-      bytes = this.bank.write([...targets], content);
+      bytes = this.bank.write(bootstrap, { ...content, ...snapshot });
+      if (rotating.length) {
+        const slim = Bridge.slimSnapshot(snapshot, c?.hashes);
+        bytes = Math.max(bytes, this.bank.write(rotating, { ...content, ...slim }));
+      }
       if (raise) {
         for (const k of toRaise) this.bank.raise(k);
         this.persist.sigCounter = Math.max(counter, sig + 1);
@@ -1039,8 +1113,27 @@ export class Bridge {
         this.persist.slotGuess = predicted + 1;
       }
     } catch (err) {
-      this.log(`publish failed: ${err.message}`);
+      // On Windows the game, or a virus scanner, can hold a slot or bell file open
+      // for a few seconds, and replacing it fails until then. Back off and keep the
+      // update queued; log the first failure only, then the recovery.
+      const f = this.failures || (this.failures = { count: 0, since: Date.now() });
+      f.count++;
+      f.retryAt = Date.now() + Math.min(4000, 250 * 2 ** (f.count - 1));
+      this.dirty.important = true;
+      if (f.count === 1) this.log(`publish failed: ${err.message}; retrying`);
       return false;
+    }
+    if (this.failures) {
+      const { count, since } = this.failures;
+      this.failures = null;
+      this.log(`publish recovered after ${count} failed ${count === 1 ? 'try' : 'tries'} (${((Date.now() - since) / 1000).toFixed(1)}s)`);
+    }
+    // This publish carried a part the addon didn't say it had. Whether it applied it is
+    // unknown until it speaks again, so don't leave that part out on a guess: if it
+    // moves back to content the addon last reported, it must be sent, not assumed.
+    if (c?.hashes) {
+      if (c.hashes.view && snapshot.x.v !== c.hashes.view) c.hashes.view = null;
+      if (c.hashes.projects && snapshot.x.p !== c.hashes.projects) c.hashes.projects = null;
     }
     for (const r of this.results) r.sent = true;
     this.lastGen = gen;

@@ -57,6 +57,10 @@ chunk()
 local data = OpenBot_Inbox
 OpenBot_Inbox = nil
 data.ack = { ui = ns.ui, seq = ns.Transport.stripSeq }
+-- The harness edits the snapshot in place, so its hashes (x) would no longer describe
+-- what it carries. Without them every snapshot counts as complete, as an older bridge's
+-- did; the test below drives the "this part is unchanged" path with its own hashes.
+data.x = nil
 data.gen = data.gen + 1
 data.nextSig = sig + 1
 ns.Transport:Apply(data)
@@ -75,13 +79,96 @@ check(#rows > 0, "transcript rendered " .. #rows .. " elements")
 local listRows = ns.ThreadList.scrollBox._rows or {}
 check(#listRows > 0, "thread list rendered " .. #listRows .. " rows")
 
+-- A snapshot may leave out the transcript and the project list when the bridge knows,
+-- from the hello, that this addon already has them. It names them in `same`.
+do
+	local view = ns.Store.data.view
+	local projects = ns.Store.data.projects
+	data.gen = data.gen + 1
+	ns.Transport:Apply({
+		gen = data.gen, x = { l = "L1", p = "P1", v = "V1" },
+		threads = ns.Store.data.threads, projects = projects, view = view,
+		bridge = ns.Store.data.bridge, usage = ns.Store.data.usage,
+		ack = { ui = ns.ui, seq = ns.Transport.stripSeq },
+	})
+	check(ns.Store.listKey == "L1" and ns.Store.projectsKey == "P1" and ns.Store.viewKey == "V1", "the addon records what it applied")
+	rows = ns.Transcript.scrollBox._rows or {}
+	local dpBefore = ns.Transcript.dp
+	data.gen = data.gen + 1
+	ns.Transport:Apply({
+		gen = data.gen, same = "pv", x = { l = "L2", p = "P2", v = "V2" },
+		threads = ns.Store.data.threads, bridge = ns.Store.data.bridge, usage = ns.Store.data.usage,
+		ack = { ui = ns.ui, seq = ns.Transport.stripSeq },
+	})
+	check(ns.Store.data.view == view, "an omitted transcript is kept")
+	check(ns.Store.data.projects == projects, "an omitted project list is kept")
+	check(ns.Store.listKey == "L2" and ns.Store.projectsKey == "P1" and ns.Store.viewKey == "V1", "it only claims the parts it was sent")
+	check(ns.Transport:Payload():find("\031L2\031P1\031V1", 1, true) ~= nil, "the hello reports what it holds")
+	check(#(ns.Transcript.scrollBox._rows or {}) == #rows and ns.Transcript.dp == dpBefore, "the transcript isn't rebuilt for an unchanged one")
+
+	-- Dropping the transcript must drop the hash too, and tell the bridge, or it would
+	-- think the addon still has it and never send it again (Back, then the same thread).
+	data.gen = data.gen + 1
+	ns.Transport:Apply({
+		gen = data.gen, x = { l = "L3", p = "P1", v = "" },
+		threads = ns.Store.data.threads, projects = ns.Store.data.projects,
+		bridge = ns.Store.data.bridge, usage = ns.Store.data.usage,
+		ack = { ui = ns.ui, seq = ns.Transport.stripSeq },
+	})
+	check(ns.Store.data.view == nil and ns.Store.viewKey == "", "a dropped transcript is not claimed")
+
+	-- Settling or reopening a thread changes the rows (quick replies) without the
+	-- transcript changing, so its hash alone can't decide a redraw.
+	ns.Store:Apply({
+		x = { l = "L4", p = "P1", v = "V1" }, same = "v",
+		threads = ns.Store.data.threads, projects = ns.Store.data.projects, bridge = ns.Store.data.bridge, usage = ns.Store.data.usage,
+	})
+	local dp = ns.Transcript.dp
+	local thread = ns.Store:Thread(ns.viewId)
+	local was = thread.s
+	thread.s = was == "open" and "failed" or "open"
+	ns.Store:Apply({
+		x = { l = "L5", p = "P1", v = "V1" }, same = "v",
+		threads = ns.Store.data.threads, projects = ns.Store.data.projects, bridge = ns.Store.data.bridge, usage = ns.Store.data.usage,
+	})
+	check(ns.Transcript.dp ~= dp, "a status change still redraws the transcript")
+	thread.s = was
+	-- Back to a complete snapshot for the rest of the checks.
+	ns.Store:Apply(data)
+end
+
 -- Send a message: queued, echoed, and present in the strip payload.
+-- A message too long for one frame would never go and would hold up the queue behind it.
+do
+	local queued = #ns.Transport.queue
+	ns.Main.composer._text = string.rep("x", 2300)
+	ns.Main:Send()
+	check(#ns.Transport.queue == queued and #ns.Main.composer._text == 2300, "a message too long for the strip is refused, and the composer keeps it")
+	ns.Main.composer._text = string.rep("x", 1900)
+	ns.Main:Send()
+	check(#ns.Transport.queue == queued + 1, "a long message that fits still goes")
+	table.remove(ns.Transport.queue)
+	ns.Transcript.echo[ns.viewId] = nil
+end
 ns.Main.composer._text = "Please run the tests"
 ns.Main:Send()
 check(#ns.Transport.queue >= 1, "command queued")
 check(ns.Transport:Payload():find("Please run the tests", 1, true) ~= nil, "message in strip payload")
 check(ns.Transport.queue[#ns.Transport.queue].args[3] == "steer", "follow-ups steer, as OpenBot does")
 check(ns.Transcript.echo[ns.viewId] ~= nil, "local echo shown")
+-- The bridge reformats what you sent (markdown, escapes); the echo still goes when it arrives.
+do
+	local v = ns.Store.data.view
+	if v and v.id == ns.viewId then
+		local last = 0
+		for _, m in ipairs(v.msgs or {}) do last = math.max(last, m.at or 0) end
+		-- The bridge renumbers its bounded window, so the new message can have a lower number.
+		table.insert(v.msgs, { r = "u", t = "|cffa8c7fa  reformatted|r", at = last + 1, n = 1 })
+		ns.Transcript:Refresh(true)
+		check(ns.Transcript.echo[ns.viewId] == nil, "local echo dropped once the sent message arrives, reformatted")
+		table.remove(v.msgs)
+	end
+end
 
 -- Pages
 ns.Main:ShowPage("usage")
@@ -487,6 +574,11 @@ do
 	check(values(L.server) == "all,,s1,s2", "servers: All, this computer and each server: " .. values(L.server))
 	check(strip(L.server.options[4].label):find("CIO CTO Consulting", 1, true) and strip(L.server.options[4].label):find("offline", 1, true), "servers: an offline server stays in the picker")
 	check(S:ProjectLabel("s1~ada") == "Ada · Home Bot", "servers: All view names a server's agents")
+	local namedInAll = false
+	for _, b in ipairs(ns.Tracker.frame and ns.Tracker.frame.Lines or {}) do
+		if b:IsShown() and b.thread and b.thread.sv == "s1" and b.Title:GetText():find("Home Bot", 1, true) then namedInAll = true end
+	end
+	check(namedInAll, "servers: in the All view, the tracker names Home Bot on its line")
 	check(localAgent == nil or S:ProjectLabel(localAgent) == S:ProjectName(localAgent), "servers: All view leaves this computer's agents plain")
 	check(values(L.dropdown):find("s1~ada", 1, true) ~= nil and (localAgent == nil or values(L.dropdown):find(localAgent, 1, true) ~= nil), "servers: All view lists every server's agents")
 
@@ -503,6 +595,11 @@ do
 		check(S:ServerSuffix("") == "this computer", "servers: this computer is named on lines while another server is picked")
 	end
 	check(S:ServerSuffix("s1") == nil, "servers: the picked server isn't named")
+	local named = false
+	for _, b in ipairs(ns.Tracker.frame and ns.Tracker.frame.Lines or {}) do
+		if b:IsShown() and b.thread and b.thread.sv == "s1" and b.Title:GetText():find("Home Bot", 1, true) then named = true end
+	end
+	check(not named, "servers: picking a server redraws the tracker without its name")
 	ns.Tracker:Refresh()
 
 	-- Message Agent opens on the picked server's agent, not the first agent anywhere.
@@ -820,7 +917,7 @@ do
 	check(not L.chordText:find("RT", 1, true), "no hard-coded Xbox names")
 	local w = L.watcher
 	check(w._scripts.OnGamePadButtonDown == nil and not w._gamepadEnabled, "the watcher never takes controller input")
-	local function frame() w._scripts.OnUpdate(w, 0.016) end
+	local function frame() Stub.now = Stub.now + 0.06 w._scripts.OnUpdate(w, 0.06) end
 	local wasOpen = ns.windowOpen
 	WOWSTUB.padHeld = { PADLTRIGGER = true, PADRTRIGGER = true }
 	frame()
@@ -839,6 +936,20 @@ do
 	WOWSTUB.padHeld = { PADBACK = true }
 	frame()
 	check(ns.windowOpen == wasOpen, "Back on its own is left to the game")
+	WOWSTUB.padHeld = {}
+	frame()
+
+	-- Back a moment before the triggers: with a 20 Hz read the two can land on
+	-- different frames, and the chord must still fire.
+	WOWSTUB.padHeld = { PADBACK = true }
+	frame()
+	WOWSTUB.padHeld = { PADBACK = true, PADLTRIGGER = true, PADRTRIGGER = true }
+	frame()
+	check(ns.windowOpen ~= wasOpen, "Back a moment before the triggers still opens it")
+	frame()
+	frame()
+	check(ns.windowOpen ~= wasOpen, "and holding all three doesn't toggle it again")
+	if ns.windowOpen ~= wasOpen then ns.Launcher:Open() end
 	WOWSTUB.padHeld = {}
 	frame()
 end
@@ -867,6 +978,23 @@ do
 	ns.db.settings.trackerPoint = nil
 	for _, t in ipairs(WOWSTUB.tickers) do t.fn() end
 	check(ns.Tracker.attached == "below", "reset reattaches it")
+
+	-- A link that goes stale on its own clock, with no update arriving to say so, still
+	-- reaches the tracker: the once-a-second tick notices the state changed.
+	ns.Transport.bridgeNow = time() - 1000
+	ns.Tracker:RefreshTimers()
+	local found = false
+	for _, b in ipairs(f.Lines) do
+		if b._shown and b.Title:GetText():find("Connection lost", 1, true) then found = true end
+	end
+	check(found, "the tracker says the connection was lost")
+	ns.Transport.bridgeNow = time()
+	ns.Tracker:RefreshTimers()
+	found = false
+	for _, b in ipairs(f.Lines) do
+		if b._shown and b.Title:GetText():find("Connection lost", 1, true) then found = true end
+	end
+	check(not found, "and that it is back")
 end
 
 -- Minimap button

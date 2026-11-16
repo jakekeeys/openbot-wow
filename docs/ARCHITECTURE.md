@@ -68,20 +68,28 @@ drive this addon's UI directly. Only install addons you trust.
 
 The frame is packed into 3-bit cells. Each cell is a 3×3-pixel square with R, G and B
 each fully on or off. The strip is 160 cells per row and up to 40 rows (about 2.4 KB),
-scaled so one UI unit is one physical pixel. It is anchored at the top-left of
-`UIParent` on the TOOLTIP strata. The bridge searches cell sizes 2–8 and small offsets,
-so a border or scaling quirk doesn't break it.
+scaled so one UI unit is one physical pixel. It is anchored 9 physical pixels right of
+and below the top-left corner of `UIParent`, on the TOOLTIP strata. Desktops that round
+window corners cut into that corner and draw a border along its edges: Windows 11 rounds
+by 8 pixels at 100 percent scaling and 16 at 200 percent, and Linux compositors can be
+set to round too. 9 pixels in, the strip's first cell is clear of a corner rounded by
+up to about 34 pixels. Bridges from before the inset look up to 9 pixels in, so they
+find it only when their capture starts at the game's corner; a border of a pixel or more
+(a windowed game on KDE Plasma, say) hides it from them until the bridge is updated. The bridge searches cell sizes 2–8 and offsets from the corner to a
+little past the inset, so a border or scaling quirk doesn't break it, and a strip an
+older addon draws in the corner itself is found too.
 
 The payload is records separated by `RS` (0x1E), with fields separated by `US` (0x1F):
 
 ```
-H  1  session  ui  nextSlot  sigNext  gen  flags  viewThreadId  addonVersion  slotCount  modelsHash
+H  1  session  ui  nextSlot  sigNext  gen  flags  viewThreadId  addonVersion  slotCount  modelsHash  listHash  projectsHash  viewHash
 C  id  verb  args…                      (one per queued command)
 ```
 
 - `session` is persistent (SavedVariables). `ui` is new every load, so the bridge can
   tell a `/reload` happened.
 - `modelsHash` is the hash of the model list the addon holds (empty until it has one). The bridge sends the list, several KB, only while this differs from its own, so it costs one publish after a `/reload` or a change in OpenBot instead of every publish.
+- `listHash`, `projectsHash` and `viewHash` are the hashes of the thread list, the project list and the transcript the addon holds (empty until it has one). The bridge leaves the project list and the transcript (up to 60 KB) out of a publish while they still match, and names them in the snapshot's `same` field so the addon keeps them. Only a part the snapshot actually carried is recorded, and the bridge stops trusting a hash as soon as it publishes a different part, so a part can be repeated but never dropped.
 - `flags`:
   - `o`: window open
   - `t`: tracker on
@@ -134,7 +142,8 @@ A publish works like this:
    It is grouped per machine and provider, and each model points at one of a few shared sets of reasoning levels instead of carrying its own. Threads carry their reasoning level (`re`), projects the level their default model uses (`de`).
 2. Write it to the slots the addon will load next (from its last confirmed position
    to a little past the bridge's prediction) and to slots 1–3 (what a `/reload`
-   bootstraps from).
+   bootstraps from). Slots 1–3 always carry the complete snapshot; the others leave
+   out the transcript and the project list when the addon's hello says it has them.
 3. Ring the next **bell**.
 
 **Bells (the "new update" signal).** Measured on this client:

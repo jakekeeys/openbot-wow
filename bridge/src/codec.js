@@ -5,7 +5,8 @@
 // The Fletcher-16 checksum covers version..payload. Bytes are packed MSB-first into
 // 3-bit cells. Each cell is a CELL x CELL square of physical pixels whose R, G and B
 // channels are each fully on or off (bit 2 = R, bit 1 = G, bit 0 = B), laid out
-// row-major, CELLS_PER_ROW cells per row, starting at the top-left of the game's UI.
+// row-major, CELLS_PER_ROW cells per row, starting STRIP_INSET pixels in from the top-left
+// of the game's UI (clear of a rounded window corner).
 
 import zlib from 'node:zlib';
 
@@ -17,6 +18,11 @@ export const CELLS_PER_ROW = 160;
 export const MAX_ROWS = 40;
 export const HEADER_BYTES = 7;
 export const MAX_PAYLOAD = Math.floor((CELLS_PER_ROW * MAX_ROWS * BITS) / 8) - HEADER_BYTES - 2;
+
+// Where the addon draws the strip: this many physical pixels in from the game's
+// top-left corner, across and down, clear of a window corner the desktop rounds.
+// Older addons drew it in the corner itself; both are found.
+export const STRIP_INSET = 9;
 
 export const US = '\x1f'; // field separator
 export const RS = '\x1e'; // record separator
@@ -116,8 +122,12 @@ function readCells(img, geo, start, n) {
 }
 
 const HEADER_CELLS = cellsForBytes(HEADER_BYTES);
+// The magic's first cell is fixed, so most positions are ruled out by one pixel.
+const FIRST_CELL = MAGIC[0] >> (8 - BITS);
 
 function headerAt(img, geo) {
+  const p = geo.pitch ?? geo.cell;
+  if (cellValueAt(img, geo.ox + Math.floor(p / 2), geo.oy + Math.floor(p / 2)) !== FIRST_CELL) return null;
   const cells = readCells(img, geo, 0, HEADER_CELLS);
   if (!cells) return null;
   const b = cellsToBytes(cells, HEADER_BYTES);
@@ -126,16 +136,30 @@ function headerAt(img, geo) {
 }
 
 // Find the strip. Tries the last known geometry first, then searches cell sizes and
-// small offsets (a window border or misaligned capture shifts the origin a little).
-// `searchY` widens the vertical search, for captures that start above the game's
-// content (a macOS title bar).
+// offsets from the corner up to the addon's inset and a little past it (a window
+// border or misaligned capture shifts the origin a little). `searchY` widens the
+// vertical search, for captures that start above the game's content (a macOS title
+// bar).
+// The first offset that reads samples each cell's first pixel column and row. Move to
+// the middle of the offsets that read, so a blended cell edge or a little drift doesn't
+// flip a cell.
+function centred(img, geo) {
+  const run = (dx, dy) => {
+    let n = 1;
+    while (n < geo.cell && headerAt(img, { ...geo, ox: geo.ox + dx * n, oy: geo.oy + dy * n })) n++;
+    return n;
+  };
+  return { ...geo, ox: geo.ox + Math.floor((run(1, 0) - 1) / 2), oy: geo.oy + Math.floor((run(0, 1) - 1) / 2) };
+}
+
 export function locate(img, hint, { searchY = 0 } = {}) {
   if (hint && headerAt(img, hint)) return hint;
   for (let cell = 2; cell <= 8; cell++) {
-    for (let oy = 0; oy <= cell * 3 + searchY; oy++) {
-      for (let ox = 0; ox <= cell * 3; ox++) {
+    const reach = STRIP_INSET + cell * 3;
+    for (let oy = 0; oy <= reach + searchY; oy++) {
+      for (let ox = 0; ox <= reach; ox++) {
         const geo = { ox, oy, cell };
-        if (headerAt(img, geo)) return geo;
+        if (headerAt(img, geo)) return centred(img, geo);
       }
     }
   }
@@ -254,6 +278,20 @@ export function parseBMP(buf) {
   const bytes = bpp / 8;
   const shifts = masks.map((m) => 31 - Math.clz32(m & -m));
   const data = Buffer.alloc(width * height * 3);
+  if (masks[0] === 0x00ff0000 && masks[1] === 0x0000ff00 && masks[2] === 0x000000ff) {
+    // The usual layout: each pixel is B, G, R bytes (then X at 32 bits). Copy bytes
+    // directly; reading every pixel as a number is several times slower.
+    for (let y = 0; y < height; y++) {
+      let i = dataOffset + (topDown ? y : height - 1 - y) * stride;
+      let o = y * width * 3;
+      for (let x = 0; x < width; x++, i += bytes, o += 3) {
+        data[o] = buf[i + 2];
+        data[o + 1] = buf[i + 1];
+        data[o + 2] = buf[i];
+      }
+    }
+    return { width, height, data };
+  }
   for (let y = 0; y < height; y++) {
     const row = dataOffset + (topDown ? y : height - 1 - y) * stride;
     for (let x = 0; x < width; x++) {

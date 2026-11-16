@@ -7,9 +7,36 @@ const DIM = 'ff9d9d9d';
 
 const color = (hex, s) => `|c${hex}${s}|r`;
 
+// Characters agents use often that the game's fonts don't have (they show as
+// empty boxes), with plain stand-ins. Arrows, check marks and crosses were seen as
+// boxes in game; punctuation such as — … • · “ ” and math such as ≥ draw fine.
+const GLYPHS = {
+  '→': '->', '⟶': '->', '➜': '->', '➔': '->', '➡': '->',
+  '←': '<-', '⟵': '<-', '⬅': '<-',
+  '↔': '<->', '⟷': '<->',
+  '⇒': '=>', '⟹': '=>', '⇐': '<=', '⇔': '<=>',
+  '↑': '^', '⬆': '^', '↓': 'v', '⬇': 'v',
+  '✓': 'OK', '✔': 'OK', '✅': 'OK', '✗': 'X', '✘': 'X', '❌': 'X',
+  '⚠': '!', '️': '',
+};
+const GLYPH_RE = new RegExp(`[${Object.keys(GLYPHS).join('')}]`, 'gu');
+
+// The game's fonts draw Latin-1 letters (â î é ü ...) but not Latin Extended ones:
+// Romanian ă ș ț (and ş ţ), Czech ě ř, Polish ą ę ő ... show as boxes. Drop their
+// accents instead (ă -> a, ș -> s). Letters with no decomposition (ł đ ı) get a
+// plain stand-in.
+const LATIN_EXT_RE = /[Ā-ɏḀ-ỿ]/gu;
+const LATIN_EXT_PLAIN = { 'ł': 'l', 'Ł': 'L', 'đ': 'd', 'Đ': 'D', 'ı': 'i', 'ħ': 'h', 'Ħ': 'H', 'ŧ': 't', 'Ŧ': 'T', 'ŀ': 'l', 'Ŀ': 'L' };
+const foldLatinExt = (c) => LATIN_EXT_PLAIN[c] ?? c.normalize('NFD').replace(/\p{M}/gu, '');
+
 // WoW treats "|" as an escape character; double it so text can't inject markup.
+// Also swaps in stand-ins for characters the game can't draw.
 export function escapeWow(s) {
-  return String(s ?? '').replace(/\|/g, '||');
+  return String(s ?? '')
+    .normalize('NFC')
+    .replace(/\|/g, '||')
+    .replace(GLYPH_RE, (c) => GLYPHS[c])
+    .replace(LATIN_EXT_RE, foldLatinExt);
 }
 
 function inline(line) {

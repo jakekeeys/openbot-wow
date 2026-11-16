@@ -435,10 +435,6 @@ function M:Send(textOverride)
 	local text = textOverride or self.composer:GetInputText() or ""
 	text = strtrim(text)
 	if text == "" then return end
-	if #text > 2300 then
-		ns.Print("That message is too long to send from the game (max ~2,000 characters).")
-		return
-	end
 	if self.mode == "new" then
 		if not self.newProject then
 			local server = ns.Store:SelectedServer()
@@ -450,22 +446,26 @@ function M:Send(textOverride)
 			end
 			return
 		end
-		ns.db.settings.lastProject = self.newProject
 		local instanceId, slug = ns.Store.SplitModelKey(self:ChosenNewModel())
 		local effort = self:ChosenNewEffort()
+		local id
 		if effort then
 			-- An empty model means OpenBot's default, at this level.
-			self.pendingNew = ns.Transport:Send("new", self.newProject, text, instanceId or "", slug or "", effort)
+			id = ns.Transport:Send("new", self.newProject, text, instanceId or "", slug or "", effort)
 		else
-			self.pendingNew = ns.Transport:Send("new", self.newProject, text, instanceId, slug)
+			id = ns.Transport:Send("new", self.newProject, text, instanceId, slug)
 		end
+		if not id then return end -- too long; the composer keeps it
+		ns.db.settings.lastProject = self.newProject
+		self.pendingNew = id
 		self.pendingNewText = text
 		ns.db.drafts.__new = nil
 	elseif ns.viewId and not textOverride and ns.Transcript:CustomAnswer(text) then
 		ns.db.drafts[ns.viewId] = nil
 	elseif ns.viewId then
 		-- OpenBot puts a message to a working agent into its current run.
-		ns.Transport:Send("send", ns.viewId, text, "steer")
+		local id = ns.Transport:Send("send", ns.viewId, text, "steer")
+		if not id then return end -- too long; the composer keeps it
 		ns.Transcript:AddLocalEcho(ns.viewId, text)
 		ns.db.drafts[ns.viewId] = nil
 	else
@@ -643,10 +643,19 @@ function M:SetPlaceholder(text)
 	if self.composer:GetInputText() == "" then self.composer:SetText("") end
 end
 
+-- The open thread's header line: status, agent (or "Channel"), and how long it has been
+-- running or how long ago it finished.
+function M:HeaderText(t)
+	local age = (t.s == "working" and t.st) and ns.Duration(time() - t.st) or ns.Ago(t.u)
+	return string.format("%s  ·  %s  ·  %s",
+		ns.Color(ns.Store.StatusColor(t.s), ns.Store.StatusText(t.s)), t.ch and ns.Store:ChannelLabel(t) or ns.Store:ProjectLabel(t.p), age)
+end
+
 function M:Refresh()
 	local f = self.frame
 	if not f or not f:IsShown() then return end
 	f.Status:SetText(self:StatusLine())
+	self.bridgeState = ns.Transport:BridgeState()
 	self:UpdateRefreshButton()
 
 	local right = f.Pages.threads.Right
@@ -689,9 +698,7 @@ function M:Refresh()
 		f.Bar.Send:SetText("Send")
 		if t then
 			f.Subtitle:SetText(t.title)
-			local status = ns.Color(ns.Store.StatusColor(t.s), ns.Store.StatusText(t.s))
-			local age = (t.s == "working" and t.st) and ns.Duration(time() - t.st) or ns.Ago(t.u)
-			header.Text:SetText(string.format("%s  ·  %s  ·  %s", status, t.ch and ns.Store:ChannelLabel(t) or ns.Store:ProjectLabel(t.p), age))
+			header.Text:SetText(self:HeaderText(t))
 			-- Close and Reopen are for side threads; a main chat can't be closed.
 			local closable = not t.mc and not t.ch
 			header.Action:SetShown(closable)
@@ -1004,10 +1011,39 @@ ns:On("CommandResult", function(r)
 	end
 end)
 
--- Live elapsed timers in the header.
+-- Live elapsed timers in the header and the visible rows. Only the text changes: the
+-- list and the transcript refresh their rows in place, so this is much cheaper than a
+-- full Refresh, which rebuilds both from the snapshot.
+function M:RefreshTimers()
+	local f = self.frame
+	if not f or not f:IsShown() then return end
+	local t = ns.Store:Thread(ns.viewId)
+	if t and self.mode == "thread" then
+		f.Pages.threads.Right.Header.Text:SetText(self:HeaderText(t))
+	end
+	ns.ThreadList:Refresh()
+	ns.Transcript:Refresh()
+end
+
 C_Timer.NewTicker(1, ns.Safe(function()
-	if M.frame and M.frame:IsShown() and M.page == "threads" then
-		local t = ns.Store:Thread(ns.viewId)
-		if t and t.s == "working" and M.mode == "thread" then M:Refresh() end
+	if not (M.frame and M.frame:IsShown()) then return end
+	-- The link can go stale on its own clock, with no update arriving to say so.
+	local state = ns.Transport:BridgeState()
+	if state ~= M.bridgeState then
+		M.bridgeState = state
+		if M.page == "threads" then
+			M:Refresh()
+		else
+			M.frame.Status:SetText(M:StatusLine())
+			M:UpdateRefreshButton()
+		end
+		return
+	end
+	if M.page ~= "threads" then return end
+	for _, t in ipairs(ns.Store.data.threads) do
+		if t.s == "working" then
+			M:RefreshTimers()
+			return
+		end
 	end
 end))
