@@ -26,7 +26,10 @@ import { findWowProcess, processKey } from './wow.js';
 import { markdownToWow, markdownToSpeech, firstLine, escapeWow } from './format.js';
 import { loadOrCreateKey, deriveKeys, open as openSealed, ENCRYPTED_VERSION } from './strip-crypto.js';
 
-export const VERSION = '0.1.0';
+import { VERSION, BUILD } from './version.js';
+import { startUpdateCheck } from './update.js';
+
+export { VERSION };
 export { STATE_DIR, CONFIG_DIR } from './paths.js';
 
 const sec = (iso) => (iso ? Math.floor(Date.parse(iso) / 1000) : undefined);
@@ -291,6 +294,7 @@ export class Bridge {
     });
     this.ob.start();
     this.servers = startServers({ fleet: this.ob, stateDir: this.stateDir, config: this.config, log: this.log });
+    this.updates = startUpdateCheck({ build: BUILD, config: this.config, log: this.log, onChange: () => this.markDirty('minor') });
     this.checkProcess();
     this.procTimer = setInterval(() => this.checkProcess(), 4000);
     this.statusTimer = setInterval(() => this.writeStatus(), 3000);
@@ -308,6 +312,7 @@ export class Bridge {
     clearInterval(this.usageTimer);
     clearTimeout(this.publishTimer);
     this.servers?.stop();
+    this.updates?.stop();
     this.ob.stop();
     this.voice.hush();
   }
@@ -875,6 +880,8 @@ export class Bridge {
     return {
       bridge: {
         version: VERSION,
+        // New changes on GitHub since this install (the update check).
+        upd: this.updates?.status().available || undefined,
         t3: ob.state, // the addon's name for the link to OpenBot
         t3err: ob.error ? escapeWow(ob.error) : undefined,
         server: ob.config?.environment?.serverVersion,
@@ -1154,6 +1161,7 @@ export class Bridge {
   writeStatus() {
     const status = {
       version: VERSION,
+      update: this.updates?.status(),
       pid: process.pid,
       at: new Date().toISOString(),
       openbot: { state: this.ob.state, error: this.ob.error, threads: this.ob.threads.size, database: this.ob.database?.origin, via: this.ob.local.via, localScripts: this.ob.apiStatus(), servers: this.ob.environments().filter((e) => !e.local), account: this.servers?.status() },

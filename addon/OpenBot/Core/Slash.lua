@@ -66,6 +66,8 @@ function ns.SelfTest()
 	end
 	ns.Print(ns.Color("gold", "Self-test"))
 	line(T.slotCount > 0, string.format("live-update files: %d found", T.slotCount), "run openbot-wow install, then fully restart the game")
+	line(not b.version or b.version == ns.version, string.format("versions: addon %s, bridge %s", ns.version, b.version or "?"), "type /reload; if this stays, rerun ./install.sh")
+	if (tonumber(b.upd) or 0) > 0 then line(false, select(2, ns.Store:VersionNotice()) or "update available", nil) end
 	T:SelfTest(function(result)
 		line(result == "ok", "update bells: " .. result .. (result == "ok" and (" (" .. tostring(T.channel) .. " channel)") or ""),
 			"turn game sound on; the addon falls back to slower polling until then")
@@ -170,3 +172,16 @@ SlashCmdList.OPENBOT = function(msg)
 		ns.Print("/ob selftest | usage | settings | status | tracker | unlock | lock | hush | errors")
 	end
 end
+
+-- Each version notice is said once a session in chat, never during combat.
+local said = {}
+local function AnnounceVersion()
+	if InCombatLockdown and InCombatLockdown() then return end
+	local kind, text = ns.Store:VersionNotice()
+	if kind and not said[kind] then
+		said[kind] = true
+		ns.Print(text)
+	end
+end
+ns:On("DataChanged", AnnounceVersion)
+ns:On("Combat", function(inCombat) if not inCombat then AnnounceVersion() end end)

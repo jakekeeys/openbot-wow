@@ -60,6 +60,8 @@ The first time, **fully quit and restart World of Warcraft**: the game only find
 
 To update: `git pull && ./install.sh`, then `/reload`.
 
+The bridge checks GitHub twice a day for newer changes (one anonymous request comparing the installed commit with this repository's branch) and says so in `openbot-wow status` and once a session in game chat. The game also says when its addon and the bridge are different versions, which is the case after an update until you `/reload`. Turn the check off with `"updateCheck": false` in the config.
+
 ## Using it
 
 - `/ob` opens the window. The minimap button and the game menu do too, and from a controller: hold both triggers and press Back.
@@ -91,6 +93,7 @@ The bridge's session appears with your other OpenBot sign-ins, and you can revok
 - `models`: extra models for the picker when not signed in, as `[{ "provider": "claude", "model": "claude-sonnet-5-5", "name": "Sonnet 5.5", "efforts": ["low", "high"] }]`.
 - `screenshotDir`: where screenshots go when not signed in (default `~/OpenBot/Shared/wow-screenshots`, which agents can open).
 - `sideThreads`: how many recent side threads per agent to show when not signed in (60).
+- `updateCheck`: `false` turns off the check for newer versions on GitHub.
 
 ## When something's wrong
 

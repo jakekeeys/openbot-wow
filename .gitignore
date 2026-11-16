@@ -5,3 +5,5 @@ __pycache__/
 bridge/dist/
 bridge/team/OPENBOT-LICENSE
 bridge/team/OPENBOT-NOTICE
+# Stamped by install.sh: the commit the installed copy came from.
+bridge/build.json

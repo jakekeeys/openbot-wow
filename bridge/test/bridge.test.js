@@ -264,6 +264,14 @@ test('an addon waiting on a stale signal gets that signal raised too', () => {
   b.stop();
 });
 
+test('the snapshot tells the addon how many new changes GitHub has', () => {
+  const { b } = fakeBridge();
+  assert.equal(b.buildSnapshot().bridge.upd, undefined);
+  b.updates = { status: () => ({ available: 2 }), stop() {} };
+  assert.equal(b.buildSnapshot().bridge.upd, 2);
+  b.stop();
+});
+
 test('a hello\'s bell is rung again only shortly after that hello, so it never silences the current one', () => {
   const { b, dir } = fakeBridge();
   // The addon said hello waiting on bell 9, then heard bells and moved on; our counter is 13.

@@ -173,6 +173,19 @@ function Store:ProjectLabel(id)
 	return suffix and (name .. " · " .. suffix) or name
 end
 
+-- Version notices, or nil: this addon and the bridge differ (the bridge was updated and the
+-- game still runs the old addon until /reload), or GitHub has newer changes (the bridge checks).
+function Store:VersionNotice()
+	local b = self.data.bridge or {}
+	if self.applied > 0 and b.version and b.version ~= ns.version then
+		return "mismatch", string.format("The addon (%s) and the bridge (%s) are different versions. Type /reload; if this stays, rerun ./install.sh on your desktop.", ns.version, b.version)
+	end
+	local n = tonumber(b.upd) or 0
+	if n > 0 then
+		return "update", string.format("An update is available (%d new change%s): run git pull && ./install.sh on your desktop, then /reload.", n, n == 1 and "" or "s")
+	end
+end
+
 -- "Channel", or "Channel · Server" where the server is named (see ServerSuffix).
 function Store:ChannelLabel(t)
 	local suffix = self:ServerSuffix(Store.ServerOf(t))

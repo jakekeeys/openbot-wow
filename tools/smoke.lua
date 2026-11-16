@@ -1070,6 +1070,41 @@ do
 	T:HideStrip()
 end
 
+-- Version notices: a mismatch with the bridge, or an update on GitHub. Each is said once a
+-- session in chat, never during combat.
+do
+	local S = ns.Store
+	local function said(text)
+		local n = 0
+		for _, m in ipairs(Stub.printed) do if m:find(text, 1, true) then n = n + 1 end end
+		return n
+	end
+	local function apply(extra)
+		local b = {}
+		for k, v in pairs(data.bridge or {}) do b[k] = v end
+		for k, v in pairs(extra) do b[k] = v end
+		data.bridge = b
+		data.gen = (ns.db.gen or 0) + 1
+		data.now = time()
+		ns.Transport:Apply(data)
+	end
+	apply({ version = ns.version, upd = false })
+	check(S:VersionNotice() == nil, "version: nothing to say when they match and nothing is new")
+	_G.InCombatLockdown = function() return true end
+	apply({ version = "0.9.9+abc1234" })
+	check(said("different versions") == 0, "version: no notice during combat")
+	_G.InCombatLockdown = function() return false end
+	ns:Fire("Combat", false)
+	check(said("different versions") == 1, "version: after combat, a mismatch is said")
+	apply({ version = "0.9.9+abc1234" })
+	check(said("different versions") == 1, "version: only once a session")
+	apply({ version = ns.version, upd = 3 })
+	check(said("An update is available (3 new changes)") == 1, "version: an update on GitHub is said")
+	apply({ version = ns.version, upd = 3 })
+	check(said("An update is available") == 1, "version: only once a session")
+	apply({ version = ns.version, upd = false })
+end
+
 -- Exhaustion
 Stub.now = Stub.now + 2
 ns.Transport.slotCursor = ns.Transport.slotCount + 1

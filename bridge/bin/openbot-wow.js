@@ -394,6 +394,9 @@ function cmdStatus(args) {
   const alive = age < 10000;
   const ok = (b) => (b ? C.g('●') : C.r('●'));
   console.log(`${ok(alive)} Bridge ${st.version} ${alive ? `running (pid ${st.pid})` : `not running (last seen ${ago(age)})`}`);
+  const up = st.update;
+  if (up?.available) console.log(`${C.y('●')} Update available: ${up.available} new change${up.available === 1 ? '' : 's'} on GitHub ${C.d('(git pull && ./install.sh, then /reload in game)')}`);
+  else if (up && !up.enabled) console.log(C.d('  Update check: off'));
   const ob = st.openbot || {};
   console.log(`${ok(ob.state === 'connected')} OpenBot: ${ob.state}${ob.error ? ` — ${ob.error}` : ''} ${C.d(`(${ob.threads ?? 0} threads; this computer ${ob.via === 'relay' ? 'through the OpenBot relay' : `from ${ob.database || 'its database'}`})`)}`);
   if (ob.account?.signedIn) {

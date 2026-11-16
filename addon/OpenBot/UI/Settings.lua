@@ -157,7 +157,11 @@ function S:Refresh()
 		"Controller shortcut: " .. (ns.Launcher.chordText and ns.Color("white", "hold " .. ns.Launcher.KeyText("PADLTRIGGER") .. " + " .. ns.Launcher.KeyText("PADRTRIGGER") .. ", press " .. ns.Launcher.KeyText("PADBACK")) or ns.Color("grey", "off (use the minimap button or the game menu)"))
 			.. ns.Color("grey", "  (also in the game menu)"),
 		"Errors: " .. ((ns.db.errors and #ns.db.errors > 0) and ns.Color("red", #ns.db.errors .. " recorded — /ob errors") or ns.Color("green", "none")),
-		"Addon " .. ns.version .. ns.Color("grey", "  ·  session " .. (ns.db.session or "?")),
+		"Addon " .. ns.version .. ns.Color("grey", "  ·  bridge " .. (b.version or "?") .. "  ·  session " .. (ns.db.session or "?")),
+		(function()
+			local kind, text = ns.Store:VersionNotice()
+			return kind and ns.Color("orange", text) or nil
+		end)(),
 	}
 	self.info:SetText(table.concat(lines, "\n"))
 end

@@ -54,6 +54,19 @@ mkdir -p "$dest/bridge.new"
 # The checkout's node_modules holds build tools; the installed copy gets only what it runs with.
 tar -C "$src/bridge" --exclude=./node_modules --exclude=./dist/spike.mjs -cf - . | tar -C "$dest/bridge.new" -xf -
 cp -r "$src/addon" "$dest/addon.new"
+# Stamp the version with the commit this comes from, so the bridge can tell when GitHub has newer
+# changes, and the addon when it's not the bridge's version (a /reload away).
+base="$(node -p 'require(process.argv[1]).version' "$src/bridge/package.json")"
+commit="$(git -C "$src" rev-parse HEAD 2>/dev/null || true)"
+dirty=false
+if [[ -n $commit && -n "$(git -C "$src" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then dirty=true; fi
+version="$base"
+if [[ -n $commit ]]; then
+  version="$base+${commit:0:7}"
+  if [[ $dirty == true ]]; then version="$version.dirty"; fi
+  printf '{"version":"%s","commit":"%s","dirty":%s}\n' "$base" "$commit" "$dirty" > "$dest/bridge.new/build.json"
+fi
+node -e 'const fs = require("fs"); const [file, v] = process.argv.slice(1); fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace(/^## Version: .*$/m, `## Version: ${v}`))' "$dest/addon.new/OpenBot/OpenBot.toc" "$version"
 # Other OpenBot servers need WebRTC (node-datachannel, a prebuilt native module). Without it the
 # bridge still shows this computer's agents.
 if [[ -f "$dest/bridge.new/dist/team.mjs" ]]; then

@@ -110,6 +110,9 @@ function B:Tooltip(tip)
 	if state ~= "connected" then tip:AddLine("Bridge: " .. state, 0.6, 0.6, 0.6) end
 	local issue = ns.Transport:RelayIssue()
 	if state == "connected" and issue then tip:AddLine(issue, 1, 0.6, 0.2) end
+	local vkind = ns.Store:VersionNotice()
+	if vkind == "mismatch" then tip:AddLine("Type /reload to load the new addon", 1, 0.6, 0.2)
+	elseif vkind == "update" then tip:AddLine("Update available (git pull && ./install.sh)", 1, 0.6, 0.2) end
 	tip:AddLine("Click to open · Right-click for settings · Drag to move", 0.6, 0.6, 0.6)
 	if ns.Launcher.chordText then tip:AddLine("Controller: hold " .. ns.Launcher.KeyText("PADLTRIGGER") .. " + " .. ns.Launcher.KeyText("PADRTRIGGER") .. ", press " .. ns.Launcher.KeyText("PADBACK"), 0.6, 0.6, 0.6) end
 end
