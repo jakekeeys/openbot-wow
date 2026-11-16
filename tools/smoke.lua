@@ -1055,6 +1055,21 @@ do
 	withBridge({ t3 = "connected", relay = "on", via = "relay", envs = nil })
 end
 
+-- Window closed and a bell missed: past the keep-alive with nothing fresh, the addon says hello.
+do
+	local T = ns.Transport
+	if ns.windowOpen then ns.Main:Toggle() end
+	T:HideStrip()
+	T.hiddenUntil = nil
+	T.lastData = GetTime()
+	T.lastTouchAt = GetTime()
+	Stub.Tick(600)
+	check(not T.stripShown, "closed window: quiet for less than the keep-alive, no hello")
+	Stub.Tick(120)
+	check(T.stripShown, "closed window: nothing fresh past the keep-alive, so it says hello")
+	T:HideStrip()
+end
+
 -- Exhaustion
 Stub.now = Stub.now + 2
 ns.Transport.slotCursor = ns.Transport.slotCount + 1

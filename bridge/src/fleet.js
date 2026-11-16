@@ -107,9 +107,13 @@ export class Fleet extends EventEmitter {
     const c = env.client;
     const onState = (s, e) => {
       if (!env.local) this.log(`${env.label}: ${s}${e ? ` (${e})` : ''}`);
-      // A server that drops off takes its threads with it.
+      // A server that drops off takes its threads with it, and brings them back when it
+      // reconnects: its client only reports threads that changed, so they're read whole.
       if (!env.local && s !== 'connected') {
         this.drop(env);
+        this.emit('change', { kind: 'snapshot', env });
+      } else if (!env.local && s === 'connected') {
+        this.rebuild(env);
         this.emit('change', { kind: 'snapshot', env });
       }
       this.emit('state', this.state, this.error, env);

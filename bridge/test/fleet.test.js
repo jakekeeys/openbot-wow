@@ -82,6 +82,12 @@ test('a server that goes offline takes its threads; removing it stops it', () =>
   remote.state = 'offline';
   remote.emit('state', 'offline', 'lost');
   assert.equal(fleet.threads.size, 0);
+  // Back again, with the same threads (its client reports no changes for them).
+  remote.state = 'connected';
+  remote.emit('state', 'connected');
+  assert.equal(fleet.threads.size, 1, 'its threads come back on reconnect');
+  remote.state = 'offline';
+  remote.emit('state', 'offline', 'lost');
   fleet.remove('s1');
   assert.equal(remote.stopped, 1);
   assert.equal(fleet.envs.length, 1);

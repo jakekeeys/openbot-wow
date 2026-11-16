@@ -264,6 +264,18 @@ test('an addon waiting on a stale signal gets that signal raised too', () => {
   b.stop();
 });
 
+test('a hello\'s bell is rung again only shortly after that hello, so it never silences the current one', () => {
+  const { b, dir } = fakeBridge();
+  // The addon said hello waiting on bell 9, then heard bells and moved on; our counter is 13.
+  b.onFrame(frame(1, [['H', 1, 'sess', 'ui1', 2, 9, 0, '', '', '0.1.0']]));
+  b.persist.sigCounter = 13;
+  b.client.pollSigAt = Date.now() - 60000;
+  b.publishNow('test');
+  // Bell 9 shares a file with 17, and ringing it would empty bell 13's file (9 - 4 = 5 ≡ 13).
+  assert.ok(rung(dir, 13) > 0, 'the bell just rung stays rung');
+  b.stop();
+});
+
 test('signals are never skipped, and never rung ahead of our counter', () => {
   const { b, dir } = fakeBridge();
   b.onFrame(frame(1, [['H', 1, 'sess', 'ui1', 2, 5, 0, 'o', '', '0.1.0']]));

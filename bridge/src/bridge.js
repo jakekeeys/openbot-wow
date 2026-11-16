@@ -417,6 +417,7 @@ export class Bridge {
     }
     c.seq = frame.seq;
     c.pollSig = hello.sig;
+    c.pollSigAt = Date.now();
     // Where the addon really is: it hasn't loaded past this slot yet.
     c.confirmedSlot = hello.slot;
     c.confirmedAt = Date.now();
@@ -1066,7 +1067,10 @@ export class Bridge {
     if (this.proc && !c?.flags.includes('s')) {
       for (let k = counter; k <= sig; k++) toRaise.push(k);
       // Waiting on an earlier bell (we restarted, say)? Bells are reusable: ring it too.
-      if (c?.pollSig && c.pollSig < counter) toRaise.push(c.pollSig);
+      // Only shortly after the hello that reported it: the addon moves on as soon as it
+      // hears a bell, and ringing a bell it has left behind empties the one four before it,
+      // which can be the bell just rung, and leaves an addon with its window closed deaf.
+      if (c?.pollSig && c.pollSig < counter && Date.now() - (c.pollSigAt || 0) < 30000) toRaise.push(c.pollSig);
     }
     const raise = toRaise.length > 0;
     // Slots: write the snapshot to every slot from the addon's last confirmed position

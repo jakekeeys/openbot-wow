@@ -35,6 +35,9 @@ local SIGNAL_POLL = 0.5
 local MIN_LOAD_GAP = 0.6
 local SHOW_FOR = 20 -- seconds a strip stays up without an acknowledgement
 local RETRY_AFTER = { 15, 30, 60, 120 }
+-- With the window closed the bridge still sends a keep-alive every 10 minutes. Past
+-- this with nothing fresh, a bell was missed: say hello so it can find us again.
+local CLOSED_QUIET = 660
 
 T.stripSeq = 0
 T.ackedSeq = -1
@@ -502,6 +505,12 @@ function T:OnUpdate(elapsed)
 	if attending and not self.stripShown and not self.hiddenUntil
 		and GetTime() - (self.lastData or 0) > 45 and GetTime() - (self.lastTouchAt or 0) > 45
 		and self:BridgeState() == "connected" then
+		self:Touch()
+	end
+	-- With the window closed we only listen, so a missed bell would leave us deaf for
+	-- good. Past the keep-alive with nothing fresh, re-announce where we are.
+	if not ns.windowOpen and not self.stripShown and not self.hiddenUntil and self.lastData
+		and GetTime() - self.lastData > CLOSED_QUIET and GetTime() - (self.lastTouchAt or 0) > CLOSED_QUIET then
 		self:Touch()
 	end
 	-- Self-heal: if the bridge hasn't answered our strip in a few seconds, or we've
